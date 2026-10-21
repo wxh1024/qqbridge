@@ -113,7 +113,7 @@ POST {apiBase}/v2/groups/{group_openid}/messages
 |---|---|---|
 | `READY` | Identify 成功 | `session_id` |
 | `RESUMED` | Resume 成功 | — |
-| `GROUP_AT_MESSAGE_CREATE` | 群内 **@机器人** 发消息 | `id`（= 被动回复的 `msg_id`）、`content`（含 `<@!123>` 提及标记，需剥离）、`group_openid`（个别环境是 `group_id`）、`author.{username, member_openid, id}` |
+| `GROUP_AT_MESSAGE_CREATE` | 群内 **@机器人** 发消息 | `id`（= 被动回复的 `msg_id`）、`content`（含 `<@!123>` 提及标记，需剥离）、`group_openid`（个别环境是 `group_id`）、`author.{username, member_openid, member_role, id}`（`member_role`：owner=群主 / admin=管理员 / member=普通成员，是群内权限的唯一判定依据） |
 | `C2C_MESSAGE_CREATE` | 单聊消息 | 同上，无 `group_openid`，有 `openid` |
 
 默认消息范围是「仅 @ 消息」，所以不 @机器人 的群聊不会产生事件 —— 这是「收不到事件」最常见的原因之一。

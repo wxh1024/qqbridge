@@ -36,6 +36,17 @@ public final class QqBridgeConfig {
 	public boolean forwardQqToGame = true;
 	public boolean notifyPlayerEnter = true;
 
+	// ===== 聊天推送开关指令（群内 @机器人 /开启聊天推送、/关闭聊天推送）=====
+	/**
+	 * 是否允许在群里用指令切换「玩家聊天 + 系统消息」推送
+	 * （切的就是上面两个 {@code syncChatToQq} / {@code syncGameMessagesToQq}，会写回本文件）。
+	 */
+	public boolean chatPushCommandEnabled = true;
+	/** true = 只有群主/管理员能切；false = 群里任何人都能切（事件不带 member_role 时的兜底） */
+	public boolean chatPushCommandRequireAdmin = true;
+	/** 开关结果回推 QQ 的格式串，{message} 为具体提示 */
+	public String chatPushToQqFormat = "**聊天推送** {message}";
+
 	// ===== 行为参数 =====
 	/** QQ→游戏 落地方式："send" = 发为本人聊天消息（全服可见）；"local" = 仅本机聊天框 */
 	public String qqToGameMode = "send";

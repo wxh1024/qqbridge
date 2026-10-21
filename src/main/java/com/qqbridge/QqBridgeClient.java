@@ -1,5 +1,6 @@
 package com.qqbridge;
 
+import com.qqbridge.bridge.ChatPushSwitch;
 import com.qqbridge.bridge.ChatRelay;
 import com.qqbridge.bridge.PearlTug;
 import com.qqbridge.bridge.ProximityAlert;
@@ -23,6 +24,7 @@ import org.slf4j.LoggerFactory;
  *   游戏聊天/系统消息 ──▶ ChatRelay ──▶ QqApi ──▶ QQ 群
  *   玩家进入视野       ──▶ ProximityAlert ──▶ ChatRelay ──▶ QQ 群
  *   QQ 群 @机器人     ──▶ QqGateway ──▶ QqIngress ──▶ 游戏聊天
+ *   QQ 群 @机器人 /开启|关闭聊天推送 ──▶ ChatPushSwitch ──▶ 切 syncChatToQq + syncGameMessagesToQq（群主/管理员）
  *   QQ 群 @机器人 /l  ──▶ QqGateway ──▶ QqIngress ──▶ PearlTug ──▶ BaritoneNavigator
  *   QQ 群 @机器人 msg_id ──▶ ChatRelay 唤醒出站队列（改用被动回复补发，仅绑定群，见 onInboundMsgId）
  */
@@ -42,7 +44,8 @@ public final class QqBridgeClient implements ClientModInitializer {
 		QqApi api = new QqApi(config, auth);
 		chatRelay = new ChatRelay(config, api);
 		PearlTug pearlTug = new PearlTug(config, chatRelay);
-		QqIngress ingress = new QqIngress(config, pearlTug);
+		ChatPushSwitch chatPushSwitch = new ChatPushSwitch(config, chatRelay);
+		QqIngress ingress = new QqIngress(config, pearlTug, chatPushSwitch);
 		ProximityAlert proximity = new ProximityAlert(config, chatRelay);
 
 		gateway = new QqGateway(config, auth, api, ingress::onGroupMessage, chatRelay::onInboundMsgId);

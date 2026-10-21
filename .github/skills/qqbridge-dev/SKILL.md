@@ -26,23 +26,25 @@ agent_created: true
 | `config/QqBridgeConfig.java` | `config/qq_bridge.json` 读写、字段默认值、格式串 | README 配置表必须同步 |
 | `bridge/ChatRelay.java` | 游戏→QQ 出站：**统一队列**（单 worker 逐条发，失败留队首→等 @ 被动补发或 1 分钟后重试主动）、限速、Markdown/纯文本选择 | 出站消息表现 |
 | `bridge/ProximityAlert.java` | tick 级玩家集合 diff + 冷却去重 | 视野提醒频率 |
-| `bridge/QqIngress.java` | QQ→游戏 入站：群绑定、`send`/`local` 两模式、`/l` 指令分流 | 游戏内可见性 |
+| `bridge/QqIngress.java` | QQ→游戏 入站：群绑定、`send`/`local` 两模式、`/l` 与聊天推送指令分流 | 游戏内可见性 |
+| `bridge/ChatPushSwitch.java` | 群内 `/开启聊天推送` / `/关闭聊天推送`：校验 `member_role`（仅 owner/admin）、写回 `syncChatToQq` + `syncGameMessagesToQq`、双通道回执 | 谁能开关推送、配置持久化 |
 | `bridge/PearlTug.java` | 拉珍珠状态机：扫描告示牌 → 选目标 → 寻路 → 转头 → 右键 → 提示 | 拉珍珠行为与文案 |
 | `bridge/BaritoneNavigator.java` | 男中音 API 薄封装（`GoalNear` / `isPathing` / `cancelEverything`） | 自动寻路是否可用 |
 | `qq/QqAuth.java` | `getAppAccessToken`，7200s 生命周期、到期前 60s 刷新 | 401 类问题 |
 | `qq/QqApi.java` | 发群消息（`msg_type=0` 文本 / `msg_type=2` Markdown）、`msg_seq`、401 自愈重试 | 发送失败排查 |
 | `qq/QqGateway.java` | `/gateway` + WebSocket：Hello/Identify/Heartbeat/Resume、指数退避重连 | 收不到事件 |
-| `qq/QqGroupMessage.java` | `GROUP_AT_MESSAGE_CREATE` 事件解析、剥离 `<@!...>` 提及标记 | 入站内容 |
+| `qq/QqGroupMessage.java` | `GROUP_AT_MESSAGE_CREATE` 事件解析、剥离 `<@!...>` 提及标记、取 `author.member_role`（owner/admin/member） | 入站内容与群内权限判定 |
 | `util/MarkdownUtil.java` | 动态值转义 + 引用块包装 | QQ 端排版 |
 | `util/RateLimiter.java` | 单线程最小间隔限速 | 平台频控 |
 
-数据流四条：
+数据流五条：
 
 ```
 游戏聊天 / 系统消息 ──▶ ChatRelay ──▶ QqApi ──▶ QQ 群
 玩家进入视野        ──▶ ProximityAlert ──▶ ChatRelay ──▶ QQ 群
 QQ 群 @机器人       ──▶ QqGateway ──▶ QqIngress ──▶ 游戏聊天
 QQ 群 @机器人 /l    ──▶ QqGateway ──▶ QqIngress ──▶ PearlTug ──▶ BaritoneNavigator ──▶ 方块交互
+QQ 群 @机器人 /开启|关闭聊天推送 ──▶ QqIngress ──▶ ChatPushSwitch ──▶ 改配置并 save() + 回执
 QQ 群 @机器人 msg_id ──▶ ChatRelay 结束退避 + 唤醒队列（改为被动回复冲刷）
 ```
 
