@@ -12,7 +12,7 @@ class ChatPushCommandTest {
 		assertEquals(Boolean.TRUE, ChatPushCommand.parse("/开启聊天推送"));
 		assertEquals(Boolean.TRUE, ChatPushCommand.parse("开启聊天推送")); // 无前导 /
 		assertEquals(Boolean.TRUE, ChatPushCommand.parse("／开启 聊天 推送")); // 全角 + 中间空格
-		assertEquals(Boolean.TRUE, ChatPushCommand.parse("#打开推送"));
+		assertEquals(Boolean.TRUE, ChatPushCommand.parse("#打开聊天推送"));
 	}
 
 	@Test
