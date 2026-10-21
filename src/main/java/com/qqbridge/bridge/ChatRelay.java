@@ -5,12 +5,15 @@ import com.qqbridge.config.QqBridgeConfig;
 import com.qqbridge.qq.QqApi;
 import com.qqbridge.util.MarkdownUtil;
 import com.qqbridge.util.RateLimiter;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.text.Text;
 
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -28,6 +31,11 @@ import java.util.concurrent.atomic.AtomicInteger;
  *    - Markdown 被拒 → 自动剥离标记，用纯文本重发一次；
  *    - 无权限 / 不在群 / 被禁言 / 内容违规 → 才进 {@code pendingPassive}，等有人 @机器人 时按被动回复补发。
  *
+ * <p>③b 无权限自愈：`40034105`（群侧没开「机器人主动在群聊内发言」）是纯平台侧开关，
+ *    代码改不动。但用户去开开关后不该还要求人 @ 一下才能恢复——所以每 5 分钟
+ *    用队列里最旧的一条做一次**主动消息探测**，成功就立刻按序把积压补发出去。
+ *    同时在游戏内聊天框提示一次该去哪开开关（日志容易被忽略）。
+ *
  * <p>④ 被动优先：收到 @机器人 的 4 分钟内（平台窗口 5 分钟，留余量）主动出站改用该 {@code msg_id}
  *    做被动回复，最多 5 条——既不吃主动消息配额，也不受群里「机器人主动在群聊内发言」开关的限制。
  *
@@ -43,6 +51,8 @@ public final class ChatRelay {
 	private static final int MAX_PASSIVE_REPLIES = 5;
 	/** 频控后的重试间隔：让配额自然恢复 */
 	private static final long RATE_LIMIT_RETRY_MS = 60_000L;
+	/** 主动消息被平台判定无权限后的探测间隔（用户去开群侧开关后，最迟 5 分钟内自动恢复） */
+	private static final long DENIED_PROBE_MS = 5 * 60_000L;
 
 	private final QqBridgeConfig config;
 	private final QqApi api;
@@ -60,6 +70,10 @@ public final class ChatRelay {
 	private volatile String passiveMsgId;
 	private volatile long passiveMsgIdAt;
 	private final AtomicInteger passiveReplies = new AtomicInteger();
+	/** 主动消息探测是否已排队（同一时刻只排一个） */
+	private final AtomicBoolean probeScheduled = new AtomicBoolean();
+	/** 游戏内「去哪开开关」的提示只弹一次 */
+	private final AtomicBoolean deniedNoticeShown = new AtomicBoolean();
 
 	public ChatRelay(QqBridgeConfig config, QqApi api) {
 		this.config = config;
@@ -123,6 +137,88 @@ public final class ChatRelay {
 
 		// 永久性失败（无权限/不在群/被禁言/内容违规）：留在队列里等有人 @机器人 时补发
 		enqueuePassive(text);
+		if (result.code() == QqApi.CODE_NO_PERMISSION) {
+			notifyDenied();
+			scheduleProbe();
+		}
+	}
+
+	/**
+	 * 主动消息被平台判「无权限」（40034105）时，每 5 分钟拿队列最旧的一条主动探一次，
+	 * 一旦成功就按序把积压全部补发——用户去 QQ 里打开群侧开关后无需等 @，也无需重启游戏。
+	 */
+	private void scheduleProbe() {
+		if (!probeScheduled.compareAndSet(false, true)) {
+			return;
+		}
+		retryer.schedule(() -> {
+			probeScheduled.set(false);
+			worker.execute(this::probeProactive);
+		}, DENIED_PROBE_MS, TimeUnit.MILLISECONDS);
+	}
+
+	private void probeProactive() {
+		String group = config.groupOpenid;
+		if (group == null || group.isEmpty()) {
+			return;
+		}
+		String text = pendingPassive.peekFirst();
+		if (text == null) {
+			return; // 队列空了，无需探测；下次再有出站自然会重新触发
+		}
+
+		limiter.acquire();
+		// 必须不带 msg_id：只有主动消息能验证群侧开关是否已打开
+		QqApi.Result result = send(group, text, null);
+		if (result.ok()) {
+			pendingPassive.pollFirst();
+			QqBridgeClient.LOGGER.info("QQ聊天桥：主动消息已恢复，开始补发积压（剩余 {} 条）", pendingPassive.size());
+			flushProactive(group);
+			return;
+		}
+		if (result.code() == QqApi.CODE_NO_PERMISSION) {
+			scheduleProbe();
+		}
+	}
+
+	/** 恢复后按序补发（仍然逐条过限速；中途再被拒就停手并重新排队探测） */
+	private void flushProactive(String group) {
+		while (true) {
+			String next = pendingPassive.peekFirst();
+			if (next == null) {
+				return;
+			}
+			if (!group.equals(config.groupOpenid)) {
+				return; // 绑定被改/清空，停手
+			}
+			limiter.acquire();
+			QqApi.Result result = send(group, next, takePassiveMsgId());
+			if (!result.ok()) {
+				if (result.code() == QqApi.CODE_NO_PERMISSION) {
+					scheduleProbe();
+				}
+				return;
+			}
+			pendingPassive.pollFirst();
+		}
+	}
+
+	/** 把「去哪开开关」直接弹到游戏内聊天框：日志里那行容易被忽略 */
+	private void notifyDenied() {
+		if (!deniedNoticeShown.compareAndSet(false, true)) {
+			return;
+		}
+		MinecraftClient client = MinecraftClient.getInstance();
+		if (client == null) {
+			return;
+		}
+		client.execute(() -> {
+			if (client.inGameHud != null) {
+				client.inGameHud.getChatHud().addMessage(Text.literal(
+						"[QQ聊天桥] 主动消息被平台拒绝（40034105）：QQ 里点机器人头像 → 机器人设置页 → "
+								+ "打开「机器人主动在群聊内发言」。开关打开后 5 分钟内会自动补发积压消息。"));
+			}
+		});
 	}
 
 	/**
