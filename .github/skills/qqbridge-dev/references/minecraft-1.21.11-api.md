@@ -13,6 +13,14 @@
 | HUD 根节点 | `net.minecraft.client.gui.hud.InGameHud` |
 | 聊天栏 | `net.minecraft.client.gui.hud.ChatHud` |
 | 世界 | `net.minecraft.world.World`（客户端实现 `ClientWorld`） |
+| 方块坐标系 | `net.minecraft.util.math.BlockPos` |
+| 方块状态 | `net.minecraft.block.BlockState`（`getBlock()` 声明在 `AbstractBlock$AbstractBlockState` 上） |
+| 方块实体 | `net.minecraft.block.entity.BlockEntity`（`getPos()` / `getWorld()`） |
+| 告示牌方块实体 | `net.minecraft.block.entity.SignBlockEntity`：`getFrontText()` / `getBackText()` → `SignText` |
+| 告示牌文本 | `net.minecraft.block.entity.SignText`：`getMessages(boolean filtered)` → `Text[]` |
+| 活板门/按钮方块 | `net.minecraft.block.TrapdoorBlock` / `net.minecraft.block.ButtonBlock`（1.21.11 已无 `AbstractButtonBlock`） |
+| 方块命中结果 | `net.minecraft.util.hit.BlockHitResult(Vec3d, Direction, BlockPos, boolean)` |
+| 交互管理器 | `net.minecraft.client.network.ClientPlayerInteractionManager` |
 
 ## 2. 方法/字段对照（旧 Mojang 名 → 现在用的 Yarn 名）
 
@@ -29,6 +37,20 @@
 | `mc.level.players()` | `client.world.getPlayers()` | 声明在 `net.minecraft.world.EntityView` |
 | `player.getUUID()` | `player.getUuid()` | 声明在 `net.minecraft.world.entity.UniquelyIdentifiable` |
 | `player.getName()` | `player.getName()` | 声明在 `net.minecraft.util.Nameable`，返回 `Text`，再 `.getString()` |
+| `player.blockPosition()` | `player.getBlockPos()` | 声明在接口 `EntityLike`（`Entity` 里搜不到属正常） |
+| `level.getBlockEntity(p)` | `world.getBlockEntity(p)` | 声明在 `net.minecraft.world.BlockView` |
+| `level.getBlockState(p)` | `world.getBlockState(p)` | 同上 |
+| `pos.below(n)` | `pos.down(n)` | `BlockPos.down()` / `down(int)` |
+| `BlockPos.betweenClosed(a,b)` | `BlockPos.iterate(a,b)` | 返回 `Iterable<BlockPos>`，**闭区间** |
+| `Vec3.atCenterOf(pos)` | `Vec3d.ofCenter(pos)` | 另有 `ofCenter(Vec3i, double)` |
+| `Vec3.atLowerCornerOf(v)` | `Vec3d.of(Vec3i)` | |
+| `Direction.getNearest(dx,dy,dz)` | `Direction.getFacing(double,double,double)` | 返回距离向量最近的轴向 |
+| `Mth.atan2` | `MathHelper.atan2` | |
+| `player.connection` | `player.networkHandler` | 字段（`ClientPlayNetworkHandler`） |
+| `mc.gameMode.useItemOn(...)` | `client.interactionManager.interactBlock(ClientPlayerEntity, Hand, BlockHitResult)` | 返回 `ActionResult`；`isAccepted()` 判断是否受理 |
+| `player.swing(hand)` | `player.swingHand(Hand)` | 声明在 `LivingEntity` |
+| `player.blockInteractionRange()` | `player.getBlockInteractionRange()` | 返回 `double` |
+| 转头封包 | `new PlayerMoveC2SPacket.LookAndOnGround(yaw, pitch, onGround, horizontalCollision)` | 包名 `net.minecraft.network.packet.c2s.play`；服务端按最后收到的视线判定方块交互，**交互前必须显式发** |
 
 ## 3. Fabric 事件（类名与注册方式不变，只是类型换成 Yarn）
 

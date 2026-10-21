@@ -51,6 +51,30 @@ public final class QqBridgeConfig {
 	 */
 	public boolean markdownToQq = true;
 
+	// ===== 拉珍珠（QQ 群 @机器人 /l <告示牌文字>）=====
+	/** 是否启用拉珍珠指令 */
+	public boolean pearlCommandEnabled = true;
+	/** 指令前缀：群消息以它开头即触发，前缀后面的全部文字作为要匹配的告示牌文本 */
+	public String pearlCommandPrefix = "/l";
+	/** 是否把指令原文也转发到游戏聊天（默认 false：只做本地动作，不刷全服聊天） */
+	public boolean pearlForwardCommand = false;
+	/** 告示牌搜索半径：水平（格），以收到指令时玩家所在方块为中心 */
+	public int pearlScanRadiusH = 16;
+	/** 告示牌搜索半径：垂直（格，上下各这么多） */
+	public int pearlScanRadiusV = 8;
+	/** 触发块相对告示牌向下搜索的格数（1..8，默认 2） */
+	public int pearlTriggerDropDepth = 2;
+	/** 男中音 GoalNear 的落点半径：走到距触发块这么多格以内即视为到达 */
+	public int pearlGoalRadius = 2;
+	/** 到达后距触发块的最大交互距离（格）；实际取它与玩家方块交互距离的较小值 */
+	public double pearlInteractRange = 4.0;
+	/** 单个拉珍珠任务的总超时（秒），超时即停止寻路并提示 */
+	public int pearlTaskTimeoutSeconds = 120;
+	/** 拉珍珠结果是否回推 QQ 群 */
+	public boolean pearlFeedbackToQq = true;
+	/** 拉珍珠回推 QQ 的格式串，{message} 为具体提示 */
+	public String pearlToQqFormat = "**拉珍珠** {message}";
+
 	// ===== 文案格式（{name}/{message} 占位；markdownToQq=true 时此处可写 Markdown 语法，如 **加粗**、## 标题）=====
 	public String chatToQqFormat = "{message}";
 	public String gameToQqFormat = "**[系统]** {message}";

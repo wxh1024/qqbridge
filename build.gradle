@@ -17,6 +17,11 @@ dependencies {
 
 	// Fabric API. This is technically optional, but you probably want it anyway.
 	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+
+	// 男中音（Baritone）—— 只编译期用 baritone.api（官方 API 未混淆），不打包进产物。
+	// 运行时由玩家自行把 Baritone 放进 mods/；未装时拉珍珠寻路能力自动禁用（FabricLoader.isModLoaded 守门）。
+	// 该 jar 在 libs/ 入库，保证 CI 也能编译。
+	modCompileOnly files("libs/baritone-1.21.11-2026.jar")
 }
 
 processResources {

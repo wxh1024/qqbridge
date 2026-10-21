@@ -23,5 +23,7 @@ qq_bridge.json
 # WorkBuddy 会话数据（不属于工程本体）
 .workbuddy/
 
-# 本地随手放的第三方 jar
+# 本地随手放的第三方 jar（根目录临时投放的会被忽略）
 /baritone-*.jar
+
+# 注意：libs/ 里用于编译期依赖的 baritone jar 必须入库（CI 编译要用），不受上面规则影响

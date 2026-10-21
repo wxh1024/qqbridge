@@ -26,7 +26,9 @@ agent_created: true
 | `config/QqBridgeConfig.java` | `config/qq_bridge.json` 读写、字段默认值、格式串 | README 配置表必须同步 |
 | `bridge/ChatRelay.java` | 游戏→QQ 出站：回环抑制、限速、被动兜底队列、Markdown/纯文本选择 | 出站消息表现 |
 | `bridge/ProximityAlert.java` | tick 级玩家集合 diff + 冷却去重 | 视野提醒频率 |
-| `bridge/QqIngress.java` | QQ→游戏 入站：群绑定、`send`/`local` 两模式 | 游戏内可见性 |
+| `bridge/QqIngress.java` | QQ→游戏 入站：群绑定、`send`/`local` 两模式、`/l` 指令分流 | 游戏内可见性 |
+| `bridge/PearlTug.java` | 拉珍珠状态机：扫描告示牌 → 选目标 → 寻路 → 转头 → 右键 → 提示 | 拉珍珠行为与文案 |
+| `bridge/BaritoneNavigator.java` | 男中音 API 薄封装（`GoalNear` / `isPathing` / `cancelEverything`） | 自动寻路是否可用 |
 | `qq/QqAuth.java` | `getAppAccessToken`，7200s 生命周期、到期前 60s 刷新 | 401 类问题 |
 | `qq/QqApi.java` | 发群消息（`msg_type=0` 文本 / `msg_type=2` Markdown）、`msg_seq`、401 自愈重试 | 发送失败排查 |
 | `qq/QqGateway.java` | `/gateway` + WebSocket：Hello/Identify/Heartbeat/Resume、指数退避重连 | 收不到事件 |
@@ -40,6 +42,7 @@ agent_created: true
 游戏聊天 / 系统消息 ──▶ ChatRelay ──▶ QqApi ──▶ QQ 群
 玩家进入视野        ──▶ ProximityAlert ──▶ ChatRelay ──▶ QQ 群
 QQ 群 @机器人       ──▶ QqGateway ──▶ QqIngress ──▶ 游戏聊天
+QQ 群 @机器人 /l    ──▶ QqGateway ──▶ QqIngress ──▶ PearlTug ──▶ BaritoneNavigator ──▶ 方块交互
 QQ 群 @机器人 msg_id ──▶ ChatRelay 被动兜底队列冲刷
 ```
 
@@ -50,7 +53,9 @@ QQ 群 @机器人 msg_id ──▶ ChatRelay 被动兜底队列冲刷
 3. **UTF-8 编码必须保留**：`tasks.withType(JavaCompile) { options.encoding = "UTF-8" }`。源码含大量中文字符串与注释，删掉这行在 GBK 平台会乱码或编译失败。
 4. **中文产物名靠 `settings.gradle` 固定**：`rootProject.name = "QQ\u804A\u5929\u6865"`（\uXXXX 转义自带中文，文件保持纯 ASCII）。**不要删这行** —— 目录名可能是任意检出路径，删了 jar 就会变成目录名；GitHub 仓库名不支持中文（用 `qqbridge`）。`gradle.properties` 的 `mod_name` 同理用 `\uXXXX`。
 5. **不在本地跑 gradle**：改完直接 commit + push，让 GitHub Actions 构建，再读 CI 结果。本地只做零成本检查（读文件、grep、`git status`）。
-6. **面向用户的文案用中文**，日志前缀统一 `QQ聊天桥：`。
+6. **男中音的用法**：`libs/baritone-1.21.11-2026.jar` 入库，`build.gradle` 里 `modCompileOnly files(...)`（Loom 会把 intermediary 命名的 mod jar 重映射成 Yarn 名用于编译），**不打包进产物**。`baritone.api` 未混淆，直接 import 用；但引用它的 `BaritoneNavigator` 只能在 `FabricLoader.isModLoaded("baritone")` 为真时被调用，否则会 `NoClassDefFoundError`。`fabric.mod.json` 里用 `suggests`（不是 `depends`），避免强制安装。
+7. **交互必须转头**：`client.interactionManager.interactBlock(...)` 前要 `setYaw/setPitch/setHeadYaw` 并**显式发** `PlayerMoveC2SPacket.LookAndOnGround`，否则服务端用旧视线判定，会点空/被拒；同时要先 `BaritoneNavigator.stop()`，否则男中音的 look behavior 会把视角抢回去。
+8. **面向用户的文案用中文**，日志前缀统一 `QQ聊天桥：`。
 
 ## 线程模型（最容易写错的地方）
 
@@ -85,7 +90,16 @@ QQ 群 @机器人 msg_id ──▶ ChatRelay 被动兜底队列冲刷
 - `wrap()` 已在外层加 `> ` 引用前缀，**格式串不要再自带 `> `**，否则会出现双重 `>>`。
 - 关 `markdownToQq` 即退回 `msg_type=0` 纯文本，此时格式串里的 Markdown 语法会原样显示。
 
-### E. 发版
+### E. 调整拉珍珠（`PearlTug`）
+
+状态机 `IDLE → SCAN → PATH → AIM → 交互 → IDLE`，全部在 `ClientTickEvents` 回调里按 tick 推进：
+
+- **SCAN**：`BlockPos.iterate(中心±半径)` 遍历，`world.getBlockEntity(pos) instanceof SignBlockEntity` 才算候选；`getFrontText()/getBackText()` 的 `getMessages(false)` 逐行 `plain().equals(输入)`；命中后 `findTrigger()` 在 `y-1..y-depth` 找 `TrapdoorBlock`/`ButtonBlock`；`nearer()` 决定多目标取谁。
+- **PATH**：`BaritoneNavigator.goNear(trigger, pearlGoalRadius)`；每 tick 用 `getEyePos().distanceTo(方块中心) <= min(pearlInteractRange, getBlockInteractionRange())` 判定到达；`isPathing()` 连续 `PATH_GRACE_TICKS` 为假 → 重发一次 → 仍不行判失败。
+- **AIM**：`aimAt()` 改 yaw/pitch/headYaw + 发 `LookAndOnGround`，稳 `AIM_TICKS` 后 `interactBlock`；成功后 `swingHand`。
+- 提示统一走 `feedback(client, 文案, 是否推 QQ)`：游戏内 `[拉珍珠] …` + `relay.push(pearlToQqFormat)`。**文案改动要同步 README「失败/进度提示」表**。
+
+### F. 发版
 
 1. 同步升 `gradle.properties` 的 `version` 与 `mod_version`（`fabric.mod.json` 用 `${version}` 占位自动取值）。
 2. commit + push，等 CI「构建」工作流通过。

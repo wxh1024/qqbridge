@@ -1,6 +1,7 @@
 package com.qqbridge;
 
 import com.qqbridge.bridge.ChatRelay;
+import com.qqbridge.bridge.PearlTug;
 import com.qqbridge.bridge.ProximityAlert;
 import com.qqbridge.bridge.QqIngress;
 import com.qqbridge.config.QqBridgeConfig;
@@ -11,6 +12,7 @@ import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
+import net.fabricmc.loader.api.FabricLoader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -21,6 +23,7 @@ import org.slf4j.LoggerFactory;
  *   游戏聊天/系统消息 ──▶ ChatRelay ──▶ QqApi ──▶ QQ 群
  *   玩家进入视野       ──▶ ProximityAlert ──▶ ChatRelay ──▶ QQ 群
  *   QQ 群 @机器人     ──▶ QqGateway ──▶ QqIngress ──▶ 游戏聊天
+ *   QQ 群 @机器人 /l  ──▶ QqGateway ──▶ QqIngress ──▶ PearlTug ──▶ BaritoneNavigator
  *   QQ 群 @机器人 msg_id ──▶ ChatRelay 被动兜底队列冲刷
  */
 public final class QqBridgeClient implements ClientModInitializer {
@@ -37,8 +40,9 @@ public final class QqBridgeClient implements ClientModInitializer {
 
 		QqAuth auth = new QqAuth(config);
 		QqApi api = new QqApi(config, auth);
-		QqIngress ingress = new QqIngress(config);
 		chatRelay = new ChatRelay(config, api);
+		PearlTug pearlTug = new PearlTug(config, chatRelay);
+		QqIngress ingress = new QqIngress(config, pearlTug);
 		ProximityAlert proximity = new ProximityAlert(config, chatRelay);
 
 		gateway = new QqGateway(config, auth, api, ingress::onGroupMessage, chatRelay::onInboundMsgId);
@@ -62,6 +66,9 @@ public final class QqBridgeClient implements ClientModInitializer {
 		// ③ 玩家进入视野 → QQ
 		ClientTickEvents.END_CLIENT_TICK.register(proximity::tick);
 
+		// ④ 拉珍珠指令状态机（扫描 → 寻路 → 转头 → 交互）
+		ClientTickEvents.END_CLIENT_TICK.register(pearlTug::tick);
+
 		// 停机清理
 		ClientLifecycleEvents.CLIENT_STOPPING.register(client -> gateway.shutdown());
 
@@ -73,6 +80,14 @@ public final class QqBridgeClient implements ClientModInitializer {
 		} else {
 			LOGGER.info("QQ聊天桥已加载（群绑定：{}）",
 					config.groupOpenid.isEmpty() ? "未绑定，等首条 @机器人 消息自动绑定" : config.groupOpenid);
+		}
+
+		if (config.pearlCommandEnabled) {
+			if (FabricLoader.getInstance().isModLoaded("baritone")) {
+				LOGGER.info("QQ聊天桥：拉珍珠已启用（指令 {} <告示牌文字>，男中音已加载）", config.pearlCommandPrefix);
+			} else {
+				LOGGER.warn("QQ聊天桥：拉珍珠已启用，但未检测到男中音（Baritone）模组，指令会直接提示无法寻路。");
+			}
 		}
 	}
 }
