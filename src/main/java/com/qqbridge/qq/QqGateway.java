@@ -20,6 +20,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 /**
@@ -30,6 +31,11 @@ import java.util.function.Consumer;
  *       → READY(op0) 后收事件；心跳(op1) 定时发、op11 为应答；
  *       op7 重连 / op9 失效会话 → 断开重来（有 session_id 则 Resume op6）。
  * 断线指数退避 1s→60s 封顶。
+ *
+ * <p>⚠️ 群隔离：机器人在多个群里时，本网关会收到<b>所有群</b>的
+ * {@code GROUP_AT_MESSAGE_CREATE}。事件本身不带过滤，{@code group_openid} 必须原样交给下游
+ * （{@link #onGroupMessage} / {@link #onInboundMsgId} 都带群 ID），由下游各自判定是否属于绑定群。
+ * 任何一处丢掉群 ID 都会把「未绑定群」的输入混进「绑定群」的处理流程。
  */
 public final class QqGateway {
 	private static final int INTENT_GROUP_AND_C2C = 1 << 25;
@@ -38,7 +44,8 @@ public final class QqGateway {
 	private final QqAuth auth;
 	private final QqApi api;
 	private final Consumer<QqGroupMessage> onGroupMessage;
-	private final Consumer<String> onInboundMsgId;
+	/** (msgId, groupOpenid)：被动回复要把群 ID 一起给下游，否则未绑定群能冲刷绑定群的队列 */
+	private final BiConsumer<String, String> onInboundMsgId;
 
 	private final HttpClient http = HttpClient.newHttpClient();
 	private final ExecutorService connector = Executors.newSingleThreadExecutor(r -> {
@@ -60,7 +67,7 @@ public final class QqGateway {
 	private volatile ScheduledFuture<?> heartbeatTask;
 
 	public QqGateway(QqBridgeConfig config, QqAuth auth, QqApi api,
-	                 Consumer<QqGroupMessage> onGroupMessage, Consumer<String> onInboundMsgId) {
+	                 Consumer<QqGroupMessage> onGroupMessage, BiConsumer<String, String> onInboundMsgId) {
 		this.config = config;
 		this.auth = auth;
 		this.api = api;
@@ -256,7 +263,7 @@ public final class QqGateway {
 				QqGroupMessage msg = QqGroupMessage.parse(d);
 				if (msg != null) {
 					onGroupMessage.accept(msg);
-					onInboundMsgId.accept(msg.id);
+					onInboundMsgId.accept(msg.id, msg.groupOpenid); // 群 ID 必须一起传
 				}
 			}
 			default -> { /* 其余事件不关心 */ }
