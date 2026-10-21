@@ -154,13 +154,15 @@ public final class ChatRelay {
 				QqApi.SendResult result = deliver(text);
 				switch (result) {
 					case OK -> {
-						queue.pollFirst();
+						// 用 removeFirstOccurrence 而不是 pollFirst：发送期间队列溢出可能已经把
+						// 这条挤掉了，此时再 pollFirst 会误删后面那条从未发过的消息
+						queue.removeFirstOccurrence(text);
 						resetHead();
 						retryNotBefore = 0;
 					}
 					case REJECTED -> {
 						// 违规内容：重发多少次都是违规，直接跳过继续发后面的
-						queue.pollFirst();
+						queue.removeFirstOccurrence(text);
 						resetHead();
 						retryNotBefore = 0;
 						QqBridgeClient.LOGGER.warn("QQ聊天桥：该条被平台判为违规，已跳过并继续发后续消息：{}",
@@ -178,7 +180,7 @@ public final class ChatRelay {
 						headAttempts++;
 						int attempts = headAttempts;
 						if (attempts >= MAX_ATTEMPTS_PER_MESSAGE) {
-							queue.pollFirst();
+							queue.removeFirstOccurrence(text);
 							resetHead();
 							retryNotBefore = 0;
 							QqBridgeClient.LOGGER.warn("QQ聊天桥：该条重试 {} 次仍失败（{}），丢弃以免堵死队列：{}",
