@@ -65,31 +65,6 @@ public final class MarkdownUtil {
 	}
 
 	/**
-	 * 反向操作：把已经渲染好的 Markdown 正文还原成可读纯文本。
-	 * 用于 Markdown 通道被平台拒绝（无模板权限等）时降级重发，避免把 {@code > **系统**}
-	 * 这类源码原样甩进群里。
-	 */
-	public static String strip(String markdown) {
-		if (markdown == null || markdown.isEmpty()) {
-			return "";
-		}
-		String[] lines = markdown.split("\n", -1);
-		StringBuilder sb = new StringBuilder(markdown.length());
-		for (int i = 0; i < lines.length; i++) {
-			String line = lines[i].trim();
-			while (line.startsWith(">")) {
-				line = line.substring(1).trim();
-			}
-			line = line.replace("**", "").replace("__", "").replace("~~", "").replace("\\", "");
-			if (i > 0) {
-				sb.append('\n');
-			}
-			sb.append(line);
-		}
-		return sb.toString().trim();
-	}
-
-	/**
 	 * 把「游戏内纯文本」消息渲染成可发往 QQ 的 Markdown 正文（转义 + 包装）。
 	 * 供 {@code ChatRelay} 各出站通道使用；模板里的 Markdown 语法（如 ** 加粗）原样保留，
 	 * 只有 {@code {name}}/{@code {message}} 插入值会被转义。

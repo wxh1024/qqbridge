@@ -5,63 +5,59 @@ import com.qqbridge.config.QqBridgeConfig;
 import com.qqbridge.qq.QqApi;
 import com.qqbridge.util.MarkdownUtil;
 import com.qqbridge.util.RateLimiter;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.text.Text;
 
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 游戏 → QQ 出站通道。
  *
- * <p>① 渲染：{@link MarkdownUtil} 转义动态值后套格式串，整体包成引用块发 QQ
- *    （msg_type=2 自定义 Markdown）；{@code markdownToQq=false} 退回纯文本。
+ * <p>① 渲染：玩家名/消息内容经 {@link MarkdownUtil#escape} 转义后套入格式串，
+ *    整体包成引用块发 QQ（msg_type=2 自定义 Markdown，群聊/单聊已开放）；
+ *    可关 {@code markdownToQq} 退回纯文本。
  *
- * <p>② 限速：{@code sendIntervalMs} 最小间隔 + {@code maxMessagesPerMinute} 每分钟上限，
- *    两道闸一起卡在平台「单群主动消息 20 条/分」的频控之内（只卡间隔是算不对的，
- *    1.2 秒/条 = 50 条/分，会直接撞 40034100）。
+ * <p>② <b>统一队列</b>（本版核心）：所有出站消息——玩家聊天、系统/游戏消息、视野提醒——
+ *    都只是 {@code addLast} 进同一个 {@link #queue}，由<b>单个</b> worker 线程按到达顺序
+ *    <b>逐条</b>发送，成功才出队。任意时刻只有一条在飞，天然保序，也不会并发压平台频控。
+ *    正常情况下两条之间隔 {@code sendIntervalMs}（{@link RateLimiter}）。
  *
- * <p>③ 分流（关键）：主动消息失败不再一律丢进队列——
- *    - 频控 / 5xx / 网络异常 → 保留消息，指数退避重试（频控等 60 秒），最多 3 次；
- *    - Markdown 被拒 → 自动剥离标记，用纯文本重发一次；
- *    - 无权限 / 不在群 / 被禁言 / 内容违规 → 才进 {@code pendingPassive}，等有人 @机器人 时按被动回复补发。
+ * <p>③ 被动优先：收到 @机器人 的 4 分钟内（平台窗口 5 分钟，留余量），队列继续往下发时
+ *    优先用那条消息的 {@code msg_id} 做<b>被动回复</b>，最多 5 条——既不吃主动消息配额，
+ *    也不受群侧「机器人主动在群聊内发言」开关的限制。
  *
- * <p>③b 无权限自愈：`40034105`（群侧没开「机器人主动在群聊内发言」）是纯平台侧开关，
- *    代码改不动。但用户去开开关后不该还要求人 @ 一下才能恢复——所以每 5 分钟
- *    用队列里最旧的一条做一次**主动消息探测**，成功就立刻按序把积压补发出去。
- *    同时在游戏内聊天框提示一次该去哪开开关（日志容易被忽略）。
+ * <p>④ 发不出去怎么办（不丢消息）：消息<b>留在队首</b>，之后的行为是
+ *    「<b>等被动机会</b> 或 <b>等 1 分钟再主动试一次</b>」——两条路谁先来走谁：
+ *    <ul>
+ *       <li>群里有人 @机器人 → 立刻拿到新 {@code msg_id} → worker 被唤醒、退避清零，
+ *           用被动回复把它和后面的积压一起发出去；</li>
+ *       <li>1 分钟内没人 @ → 退避到期，自己再发一次主动消息。</li>
+ *    </ul>
+ *    仍然失败就继续按这个规则循环（等价于回退到老机制：消息一直在队列里等 @ 冲刷，
+ *    期间每分钟主动探一次），既不丢消息，也不会无限快速重试把日志刷爆。
  *
- * <p>④ 被动优先：收到 @机器人 的 4 分钟内（平台窗口 5 分钟，留余量）主动出站改用该 {@code msg_id}
- *    做被动回复，最多 5 条——既不吃主动消息配额，也不受群里「机器人主动在群聊内发言」开关的限制。
- *
- * <p>⑤ 群隔离：被动回复的 {@code msg_id} 只在它所属那个群有效，未绑定群的 @消息 一律不冲刷队列。
+ * <p>⑤ 群隔离：被动回复的 {@code msg_id} 只在它所属那个群有效，未绑定群的 @消息 一律不碰队列。
  */
 public final class ChatRelay {
 	private static final int MAX_CONTENT = 480;
-	/** 暂时性失败的最大重试次数 */
-	private static final int MAX_ACTIVE_RETRY = 3;
 	/** 被动回复窗口：平台 5 分钟，这里留 1 分钟余量 */
 	private static final long PASSIVE_WINDOW_MS = 4 * 60_000L;
-	/** 同一条 @消息 最多被动回复 5 次（平台硬限制） */
+	/** 同一个 msg_id 最多被动回复 5 次（平台硬限制） */
 	private static final int MAX_PASSIVE_REPLIES = 5;
-	/** 频控后的重试间隔：让配额自然恢复 */
-	private static final long RATE_LIMIT_RETRY_MS = 60_000L;
-	/** 主动消息被平台判定无权限后的探测间隔（用户去开群侧开关后，最迟 5 分钟内自动恢复） */
-	private static final long DENIED_PROBE_MS = 5 * 60_000L;
+	/** 发送失败后的等待间隔：期间来 @机器人 就立刻发，否则到点自己再试一次主动消息 */
+	private static final long RETRY_INTERVAL_MS = 60_000L;
 
 	private final QqBridgeConfig config;
 	private final QqApi api;
 	private final RateLimiter limiter;
-	/** 双端队列：失败回填要 addFirst 保持原有先后顺序 */
-	private final ConcurrentLinkedDeque<String> pendingPassive = new ConcurrentLinkedDeque<>();
-	private final ExecutorService worker = daemon("qqbridge-outbound");
-	private final ScheduledExecutorService retryer = Executors.newSingleThreadScheduledExecutor(r -> {
-		Thread t = new Thread(r, "qqbridge-retry");
+
+	/** 统一出站队列：所有消息按到达顺序排这里，worker 单线程逐条发，成功才出队 */
+	private final ConcurrentLinkedDeque<String> queue = new ConcurrentLinkedDeque<>();
+	/** worker 的等待门：队列空 / 群未绑定 / 失败退避时睡在这上面，{@link #push} 与 @消息 会叫醒 */
+	private final Object gate = new Object();
+	private final ExecutorService worker = Executors.newSingleThreadExecutor(r -> {
+		Thread t = new Thread(r, "qqbridge-outbound");
 		t.setDaemon(true);
 		return t;
 	});
@@ -70,15 +66,14 @@ public final class ChatRelay {
 	private volatile String passiveMsgId;
 	private volatile long passiveMsgIdAt;
 	private final AtomicInteger passiveReplies = new AtomicInteger();
-	/** 主动消息探测是否已排队（同一时刻只排一个） */
-	private final AtomicBoolean probeScheduled = new AtomicBoolean();
-	/** 游戏内「去哪开开关」的提示只弹一次 */
-	private final AtomicBoolean deniedNoticeShown = new AtomicBoolean();
+	/** 退避到什么时候；当前时刻大于它才允许再发（0 = 不在退避） */
+	private volatile long retryNotBefore;
 
 	public ChatRelay(QqBridgeConfig config, QqApi api) {
 		this.config = config;
 		this.api = api;
-		this.limiter = new RateLimiter(config.sendIntervalMs, config.maxMessagesPerMinute);
+		this.limiter = new RateLimiter(config.sendIntervalMs);
+		worker.execute(this::sendLoop);
 	}
 
 	/** 玩家聊天（CHAT 事件） */
@@ -96,139 +91,25 @@ public final class ChatRelay {
 		push(format(config.playerEnterFormat, name, message));
 	}
 
-	/** 任意出站（内部限速 + 失败分流） */
+	/** 任意出站：只负责入队 + 叫醒 worker，真正的发送全在 worker 线程里排队做 */
 	public void push(String line) {
 		if (line == null || line.isEmpty()) {
 			return;
 		}
-		String text = truncate(line);
-		worker.execute(() -> sendActive(text, 0));
+		queue.addLast(truncate(line));
+		while (queue.size() > Math.max(1, config.maxPendingMessages)) {
+			queue.pollFirst(); // 真被刷爆了才丢最老的，保证队列不无限涨
+		}
+		wake();
 	}
 
 	/**
-	 * 主动出站：优先走被动回复窗口（省主动配额、绕开群侧开关），窗口不可用就发主动消息。
-	 *
-	 * @param attempt 已重试次数
-	 */
-	private void sendActive(String text, int attempt) {
-		String group = config.groupOpenid;
-		if (group == null || group.isEmpty()) {
-			// 还没绑定群（等首条 @机器人 自动绑定），先入兜底队列
-			enqueuePassive(text);
-			return;
-		}
-
-		limiter.acquire();
-
-		String msgId = takePassiveMsgId();
-		QqApi.Result result = send(group, text, msgId);
-		if (result.ok()) {
-			return;
-		}
-
-		if (result.transientFailure() && attempt < MAX_ACTIVE_RETRY) {
-			long delay = retryDelay(result, attempt);
-			QqBridgeClient.LOGGER.info("QQ聊天桥：{}ms 后重试出站消息（第 {}/{} 次，code={}）",
-					delay, attempt + 1, MAX_ACTIVE_RETRY, result.code());
-			retryer.schedule(() -> worker.execute(() -> sendActive(text, attempt + 1)),
-					delay, TimeUnit.MILLISECONDS);
-			return;
-		}
-
-		// 永久性失败（无权限/不在群/被禁言/内容违规）：留在队列里等有人 @机器人 时补发
-		enqueuePassive(text);
-		if (result.code() == QqApi.CODE_NO_PERMISSION) {
-			notifyDenied();
-			scheduleProbe();
-		}
-	}
-
-	/**
-	 * 主动消息被平台判「无权限」（40034105）时，每 5 分钟拿队列最旧的一条主动探一次，
-	 * 一旦成功就按序把积压全部补发——用户去 QQ 里打开群侧开关后无需等 @，也无需重启游戏。
-	 */
-	private void scheduleProbe() {
-		if (!probeScheduled.compareAndSet(false, true)) {
-			return;
-		}
-		retryer.schedule(() -> {
-			probeScheduled.set(false);
-			worker.execute(this::probeProactive);
-		}, DENIED_PROBE_MS, TimeUnit.MILLISECONDS);
-	}
-
-	private void probeProactive() {
-		String group = config.groupOpenid;
-		if (group == null || group.isEmpty()) {
-			return;
-		}
-		String text = pendingPassive.peekFirst();
-		if (text == null) {
-			return; // 队列空了，无需探测；下次再有出站自然会重新触发
-		}
-
-		limiter.acquire();
-		// 必须不带 msg_id：只有主动消息能验证群侧开关是否已打开
-		QqApi.Result result = send(group, text, null);
-		if (result.ok()) {
-			pendingPassive.pollFirst();
-			QqBridgeClient.LOGGER.info("QQ聊天桥：主动消息已恢复，开始补发积压（剩余 {} 条）", pendingPassive.size());
-			flushProactive(group);
-			return;
-		}
-		if (result.code() == QqApi.CODE_NO_PERMISSION) {
-			scheduleProbe();
-		}
-	}
-
-	/** 恢复后按序补发（仍然逐条过限速；中途再被拒就停手并重新排队探测） */
-	private void flushProactive(String group) {
-		while (true) {
-			String next = pendingPassive.peekFirst();
-			if (next == null) {
-				return;
-			}
-			if (!group.equals(config.groupOpenid)) {
-				return; // 绑定被改/清空，停手
-			}
-			limiter.acquire();
-			QqApi.Result result = send(group, next, takePassiveMsgId());
-			if (!result.ok()) {
-				if (result.code() == QqApi.CODE_NO_PERMISSION) {
-					scheduleProbe();
-				}
-				return;
-			}
-			pendingPassive.pollFirst();
-		}
-	}
-
-	/** 把「去哪开开关」直接弹到游戏内聊天框：日志里那行容易被忽略 */
-	private void notifyDenied() {
-		if (!deniedNoticeShown.compareAndSet(false, true)) {
-			return;
-		}
-		MinecraftClient client = MinecraftClient.getInstance();
-		if (client == null) {
-			return;
-		}
-		client.execute(() -> {
-			if (client.inGameHud != null) {
-				client.inGameHud.getChatHud().addMessage(Text.literal(
-						"[QQ聊天桥] 主动消息被平台拒绝（40034105）：QQ 里点机器人头像 → 机器人设置页 → "
-								+ "打开「机器人主动在群聊内发言」。开关打开后 5 分钟内会自动补发积压消息。"));
-			}
-		});
-	}
-
-	/**
-	 * 收到 @机器人 消息（拿到 msg_id）时：记下被动回复窗口，并冲刷兜底队列。
-	 * 被动回复 5 分钟有效、每条消息最多 5 次。
+	 * 收到 @机器人 消息（拿到 msg_id）：打开被动回复窗口、结束退避并叫醒 worker，
+	 * 队列里的积压会立刻用被动回复往下走（每条消息最多 5 条，5 分钟窗口）。
 	 *
 	 * <p><b>群隔离</b>：msg_id 只在「消息所属的那个群」里有效。机器人在多个群时，
-	 * 未绑定群的 @消息 也会到这里，若拿它的 msg_id 去冲绑定群的队列，
-	 * QQ 会拒绝，而队列项已被 poll 走 —— 消息就这么没了。所以先比群 ID，
-	 * 不匹配就完全不碰队列；发送失败的消息放回队首，留给下一条 msg_id，不丢。
+	 * 未绑定群的 @消息 也会到这里，若拿它的 msg_id 去发绑定群，QQ 会拒绝、
+	 * 还会白白耗掉队首的重试机会——所以先比群 ID，不匹配就完全不碰队列。
 	 */
 	public void onInboundMsgId(String msgId, String groupOpenid) {
 		if (msgId == null || msgId.isEmpty() || groupOpenid == null || groupOpenid.isEmpty()) {
@@ -236,61 +117,99 @@ public final class ChatRelay {
 		}
 		String bound = config.groupOpenid;
 		if (bound == null || bound.isEmpty() || !bound.equals(groupOpenid)) {
-			return; // 未绑定群的消息：不参与兜底冲刷
+			return; // 未绑定群的消息：不参与队列冲刷
 		}
-
-		// 打开被动回复窗口：之后 4 分钟内的主动出站会优先用它
 		passiveMsgId = msgId;
 		passiveMsgIdAt = System.currentTimeMillis();
 		passiveReplies.set(0);
+		retryNotBefore = 0; // 有被动机会，不必再等那 1 分钟
+		wake();
+	}
 
-		if (pendingPassive.isEmpty()) {
-			return;
-		}
-		worker.execute(() -> {
-			if (!bound.equals(config.groupOpenid)) {
-				return; // 排队期间绑定被改/清空了，放弃这次冲刷
-			}
-			for (int i = 0; i < MAX_PASSIVE_REPLIES; i++) {
-				if (passiveReplies.get() >= MAX_PASSIVE_REPLIES) {
-					break;
-				}
-				String text = pendingPassive.pollFirst();
+	// ==================== worker：唯一的发送者 ====================
+
+	/** 队列循环：等到「可发」→ 发队首 → 成功出队，失败留在队首进入退避 */
+	private void sendLoop() {
+		while (!Thread.currentThread().isInterrupted()) {
+			try {
+				awaitSendable();
+				String text = queue.peekFirst();
 				if (text == null) {
-					break;
+					continue;
 				}
-				if (!send(bound, text, msgId).ok()) {
-					pendingPassive.addFirst(text); // 回填队首：保序，且不丢
-					break;
+				if (deliver(text)) {
+					queue.pollFirst();
+					continue;
 				}
+				retryNotBefore = System.currentTimeMillis() + RETRY_INTERVAL_MS;
+				QqBridgeClient.LOGGER.warn("QQ聊天桥：出站消息发送失败，保留在队列（共 {} 条）；"
+								+ "等 @机器人 用被动回复补发，或 {} 秒后再试一次主动消息",
+						queue.size(), RETRY_INTERVAL_MS / 1000);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				return;
+			} catch (RuntimeException e) {
+				QqBridgeClient.LOGGER.warn("QQ聊天桥：出站队列异常：{}", e.toString());
 			}
-		});
+		}
 	}
 
-	/**
-	 * 按配置通道发送；Markdown 被平台拒（无模板权限/参数错误等）时剥掉标记用纯文本重发一次，
-	 * 并维护被动回复计数（同一 msg_id 累计超过 5 次平台会直接拒）。
-	 */
-	private QqApi.Result send(String group, String text, String msgId) {
-		QqApi.Result result = config.markdownToQq
-				? api.sendGroupMarkdown(group, text, msgId)
-				: api.sendGroupText(group, text, msgId);
-		if (!result.ok() && config.markdownToQq && result.markdownProblem()) {
-			QqBridgeClient.LOGGER.warn("QQ聊天桥：Markdown 消息被拒（code={}），改用纯文本重发", result.code());
-			result = api.sendGroupText(group, MarkdownUtil.strip(text), msgId);
+	/** 阻塞到「有消息 + 群已绑定 + 不在退避期（或有被动机会）」为止 */
+	private void awaitSendable() throws InterruptedException {
+		synchronized (gate) {
+			while (true) {
+				if (queue.isEmpty()) {
+					gate.wait(); // 没消息就一直睡，push 会叫醒
+					continue;
+				}
+				String group = config.groupOpenid;
+				if (group == null || group.isEmpty()) {
+					// 还没绑定群（等首条 @机器人 自动绑定）：消息先躺在队列里
+					gate.wait(RETRY_INTERVAL_MS);
+					continue;
+				}
+				long now = System.currentTimeMillis();
+				if (now >= retryNotBefore || takePassiveMsgId() != null) {
+					return;
+				}
+				// 退避期内：等 @消息 提前叫醒（或被兜底超时唤醒后再判一次）
+				gate.wait(Math.min(retryNotBefore - now, 1000L));
+			}
 		}
-		if (result.ok() && msgId != null) {
-			passiveReplies.incrementAndGet();
-		}
-		return result;
 	}
 
-	/** 频控等配额恢复；其它暂时性故障指数退避 2s → 4s → 8s */
-	private static long retryDelay(QqApi.Result result, int attempt) {
-		if (result.rateLimited()) {
-			return RATE_LIMIT_RETRY_MS;
+	/** 发一条：有被动窗口就走被动回复（不吃主动配额），否则按频率发主动消息 */
+	private boolean deliver(String text) {
+		String group = config.groupOpenid;
+		if (group == null || group.isEmpty()) {
+			return false;
 		}
-		return 2_000L << Math.min(attempt, 3);
+
+		String msgId = takePassiveMsgId();
+		boolean passive = msgId != null;
+		if (!passive) {
+			limiter.acquire(); // 主动消息之间保持最小间隔
+			// 限速等待期间可能来了 @消息，那就改用被动回复（同时省下一次主动配额）
+			msgId = takePassiveMsgId();
+			passive = msgId != null;
+		}
+
+		boolean ok = sendToQq(group, text, msgId);
+		if (ok) {
+			if (passive) {
+				passiveReplies.incrementAndGet();
+			}
+			retryNotBefore = 0;
+		}
+		return ok;
+	}
+
+	/** 按配置的 {@code markdownToQq} 选择发送通道（Markdown 或纯文本） */
+	private boolean sendToQq(String group, String text, String msgId) {
+		if (config.markdownToQq) {
+			return api.sendGroupMarkdown(group, text, msgId);
+		}
+		return api.sendGroupText(group, text, msgId);
 	}
 
 	/** 取当前可用的被动回复 msg_id；窗口过期或次数用尽返回 null（退回主动消息） */
@@ -305,10 +224,9 @@ public final class ChatRelay {
 		return passiveReplies.get() >= MAX_PASSIVE_REPLIES ? null : id;
 	}
 
-	private void enqueuePassive(String text) {
-		pendingPassive.addLast(text);
-		while (pendingPassive.size() > Math.max(1, config.maxPendingMessages)) {
-			pendingPassive.pollFirst();
+	private void wake() {
+		synchronized (gate) {
+			gate.notifyAll();
 		}
 	}
 
@@ -328,13 +246,5 @@ public final class ChatRelay {
 
 	private static String truncate(String text) {
 		return text.length() <= MAX_CONTENT ? text : text.substring(0, MAX_CONTENT - 1) + "…";
-	}
-
-	private static ExecutorService daemon(String name) {
-		return Executors.newSingleThreadExecutor(r -> {
-			Thread t = new Thread(r, name);
-			t.setDaemon(true);
-			return t;
-		});
 	}
 }

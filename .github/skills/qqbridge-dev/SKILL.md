@@ -24,17 +24,17 @@ agent_created: true
 |---|---|---|
 | `QqBridgeClient.java` | 入口，装配所有组件并注册 Fabric 事件 | 所有链路 |
 | `config/QqBridgeConfig.java` | `config/qq_bridge.json` 读写、字段默认值、格式串 | README 配置表必须同步 |
-| `bridge/ChatRelay.java` | 游戏→QQ 出站：两道限速、失败分流（退避重试／降级纯文本／入队等 @）、被动回复优先 | 出站消息表现 |
+| `bridge/ChatRelay.java` | 游戏→QQ 出站：**统一队列**（单 worker 逐条发，失败留队首→等 @ 被动补发或 1 分钟后重试主动）、限速、Markdown/纯文本选择 | 出站消息表现 |
 | `bridge/ProximityAlert.java` | tick 级玩家集合 diff + 冷却去重 | 视野提醒频率 |
-| `bridge/QqIngress.java` | QQ→游戏 入站：群绑定（**不受任何开关影响**）、`send`/`local` 两模式、`/l` 指令分流 | 游戏内可见性、出站能否拿到 groupOpenid |
+| `bridge/QqIngress.java` | QQ→游戏 入站：群绑定、`send`/`local` 两模式、`/l` 指令分流 | 游戏内可见性 |
 | `bridge/PearlTug.java` | 拉珍珠状态机：扫描告示牌 → 选目标 → 寻路 → 转头 → 右键 → 提示 | 拉珍珠行为与文案 |
 | `bridge/BaritoneNavigator.java` | 男中音 API 薄封装（`GoalNear` / `isPathing` / `cancelEverything`） | 自动寻路是否可用 |
 | `qq/QqAuth.java` | `getAppAccessToken`，7200s 生命周期、到期前 60s 刷新 | 401 类问题 |
-| `qq/QqApi.java` | 发群消息（`msg_type=0` 文本 / `msg_type=2` Markdown）、返回 `Result`（含平台错误码）、`msg_seq` 仅被动回复带、401 自愈重试 | 发送失败排查 |
+| `qq/QqApi.java` | 发群消息（`msg_type=0` 文本 / `msg_type=2` Markdown）、`msg_seq`、401 自愈重试 | 发送失败排查 |
 | `qq/QqGateway.java` | `/gateway` + WebSocket：Hello/Identify/Heartbeat/Resume、指数退避重连 | 收不到事件 |
 | `qq/QqGroupMessage.java` | `GROUP_AT_MESSAGE_CREATE` 事件解析、剥离 `<@!...>` 提及标记 | 入站内容 |
 | `util/MarkdownUtil.java` | 动态值转义 + 引用块包装 | QQ 端排版 |
-| `util/RateLimiter.java` | 单线程限速：最小间隔 + 每分钟滚动窗口配额 | 平台频控 |
+| `util/RateLimiter.java` | 单线程最小间隔限速 | 平台频控 |
 
 数据流四条：
 
@@ -43,7 +43,7 @@ agent_created: true
 玩家进入视野        ──▶ ProximityAlert ──▶ ChatRelay ──▶ QQ 群
 QQ 群 @机器人       ──▶ QqGateway ──▶ QqIngress ──▶ 游戏聊天
 QQ 群 @机器人 /l    ──▶ QqGateway ──▶ QqIngress ──▶ PearlTug ──▶ BaritoneNavigator ──▶ 方块交互
-QQ 群 @机器人 msg_id ──▶ ChatRelay 被动兜底队列冲刷
+QQ 群 @机器人 msg_id ──▶ ChatRelay 结束退避 + 唤醒队列（改为被动回复冲刷）
 ```
 
 ## 硬性约定（违反会直接构建失败或产物不可用）
@@ -62,7 +62,8 @@ QQ 群 @机器人 msg_id ──▶ ChatRelay 被动兜底队列冲刷
 - Fabric 事件（`ClientReceiveMessageEvents` / `ClientTickEvents` / `ClientLifecycleEvents`）在**客户端主线程**回调。
 - `QqGateway` 的 WS 回调在 `qqbridge-ws-connector` 守护线程，`ChatRelay` 出站走 `qqbridge-outbound` 单线程。
 - **任何触碰 `Minecraft` / 世界 / 聊天框的代码都必须包在 `mc.execute(...)` 里**（见 `QqIngress`）。反过来，网络请求不要放主线程。
-- 出站统一经 `ChatRelay.push(...)`，不要在业务类里直接调 `QqApi` —— 否则绕过限速与被动兜底队列。
+- 出站统一经 `ChatRelay.push(...)`，不要在业务类里直接调 `QqApi` —— 否则绕过队列与限速。
+- `ChatRelay` 只有一个发送线程（`qqbridge-outbound`）：**入队/唤醒**可以从任意线程（`push`、`onInboundMsgId` 里的 `gate.notifyAll()`），**发送**只允许在这个 worker 里发生。新增发送路径若绕开 worker 就会破坏「逐条保序」。
 - 阻塞式网络调用（`http.send`、`closed.join()`）只允许出现在上述后台线程。
 
 ## 改动配方
@@ -70,7 +71,7 @@ QQ 群 @机器人 msg_id ──▶ ChatRelay 被动兜底队列冲刷
 ### A. 新增一种「游戏 → QQ」事件（例：玩家死亡提醒）
 
 1. 在 `QqBridgeConfig` 加开关字段（默认 `true`）与可选格式串（`{name}` / `{message}` 占位）。
-2. 在 `ChatRelay` 加一个 `pushXxx(...)`，内部调 `format(config.xxxFormat, name, message)` 再 `push(...)`（自动获得限速 + 兜底）。
+2. 在 `ChatRelay` 加一个 `pushXxx(...)`，内部调 `format(config.xxxFormat, name, message)` 再 `push(...)`（自动获得排队 + 限速 + 失败退避）。
 3. 在 `QqBridgeClient` 注册对应 Fabric 事件，**回调里只做取值**，重活交给 `ChatRelay` 的后台线程。
 4. README 的功能表 / 配置表各加一行。
 
@@ -120,8 +121,7 @@ QQ 群 @机器人 msg_id ──▶ ChatRelay 被动兜底队列冲刷
 | 现象 | 优先怀疑 |
 |---|---|
 | 日志 `获取QQ access_token失败` / HTTP 401 | `appId`/`clientSecret` 错，或 `sandbox` 与平台环境不匹配；`QqAuth` 会自动重取一次 |
-| 日志 `QQ发群消息失败` code=40034105 | 群侧没开「机器人主动在群聊内发言」（QQ 里点机器人头像 → 机器人设置页）。这是**平台侧开关，代码改不动**：插件已把提示弹到游戏内聊天框，并每 5 分钟探测一次（`ChatRelay#probeProactive`），开关打开后自动补发 |
-| 日志 `QQ发群消息失败` code=40034100 | 主动消息超频控（每群 20 条/分、1000 条/天）；先看 `sendIntervalMs` 与 `maxMessagesPerMinute`，`60000/间隔` 就是每分钟条数 |
+| 日志 `QQ发群消息失败` HTTP 4xx | 主动推送被拒 → 多半是群主没在机器人设置页开「推送开关」；消息留在队列里，等下次 @ 用被动回复冲刷，同时每分钟自动重试一次主动消息 |
 | 完全收不到群消息 | 机器人没拉进群 / 群聊能力没开 / 消息没 @机器人（默认只订阅 @ 消息）；先确认日志有 `READY` |
 | 群绑定错乱 | `groupOpenid` 留空时**首条** @ 消息的群会被自动绑定并写回配置；换群要手动改配置 |
 | 群里的消息又被刷回 QQ 一遍 | `qqToGameMode = send` 的固有效果（已无回显抑制）：本条被服务器回显 → 聊天钩子再推 QQ。改用 `local`，或关 `syncChatToQq` |

@@ -72,32 +72,16 @@ POST {apiBase}/v2/groups/{group_openid}/messages
 | `msg_id` | 不带 | **必带**事件里的消息 `id` |
 | 时效 | 随时 | 收到消息后 **5 分钟**内 |
 | 次数 | 受平台频控 | 同一 `msg_id` 最多 **5 次** |
-| 前置条件 | 群侧开启**「机器人主动在群聊内发言」**（QQ 里点机器人头像 → 机器人设置页；手机上可能显示为「允许主动发送」）。未开时一律 `40034105 主动消息失败, 无权限` | 无需额外开关 |
-
-**被动回复优先**：收到 @消息 后的 5 分钟内本模组优先用该 `msg_id` 做被动回复（最多 5 条），既不吃主动消息配额，也不受群侧开关限制；窗口过期才退回主动消息。
+| 前置条件 | 群主在手机 QQ「机器人设置页」打开**推送开关**（默认关闭） | 无需额外开关 |
 
 `msg_seq` 用于同一 `msg_id` 下的多条被动回复去重，**必须递增**，否则会被判重丢弃。本模组用 `AtomicLong` 单调递增。
 
-### 4.4 频控与常见错误码
+### 4.4 频控参考
 
-- 主动消息单关系维度（**每个群**）：**20 条/分**、**1000 条/天**
-- Bot 维度（跨群合计）：企业/个人认证 60 qpm，未认证 30 qpm
+- 约 **20 条/分钟/群**
+- 约 **1000 条/天/群**
 
-⚠️ **认证只抬高 Bot 维度，不改单群上限**：单关系维度的 20 条/分/群对认证和未认证一视同仁。本模组只发一个绑定群，所以瓶颈恒为 20 条/分；「我认证了 60 条/分」不等于单群能发 60 条。只有同时向多个群推送时，60 这个总量才有意义。
-- 被动回复不吃上述配额，但同一 `msg_id` 5 分钟内最多 5 次
-
-本模组用**两道闸**：`sendIntervalMs = 3200`（≈18 条/分）**加** `maxMessagesPerMinute = 18` 的滚动 60 秒窗口。
-⚠️ 只卡间隔是算不对的：`sendIntervalMs = 1200` 等于 **50 条/分**，早就超了 20 条/分，会稳定撞 `40034100`。改任一个值前先把「60000 / 间隔」算一遍。
-
-| 错误码 | 含义 | 本模组处理 |
-|---|---|---|
-| `40034100` | 主动消息超频控 | 退避 **60 秒**后重试，共 3 次 |
-| `40034105` | 主动消息无权限（群侧开关没开） | 记中文指引 + **游戏内弹一次提示** + 入队列；每 5 分钟探测一次，开关打开后自动按序补发 |
-| `40034101` / `40054003` | 机器人不在群 | 入队 + 提示重新拉群 |
-| `40054002` | 机器人被禁言 | 入队 + 提示解禁 |
-| `40034011` / `40034124` / `304036` / `40034127` / `22006` | Markdown 被拒 | **自动剥标记降级纯文本重发** |
-| `40054007` | 长度超限 | 出站统一按 480 字符截断 |
-| HTTP 5xx / 网络异常 | 暂时性故障 | 指数退避 2s → 4s → 8s |
+本模组默认 `sendIntervalMs = 1200`（≥1.2s/条），远低于上限。改这个值前先算一遍每分钟条数。
 
 ## 5. WebSocket 网关
 
@@ -140,11 +124,8 @@ POST {apiBase}/v2/groups/{group_openid}/messages
 |---|---|
 | token 获取与提前刷新 | `qq/QqAuth.java` |
 | 401 自愈（重取 token 重试一次） | `qq/QqApi#post`、`qq/QqGateway#fetchGatewayUrl` |
-| `msg_type` 0/2 双通道 | `qq/QqApi#sendGroupText` / `#sendGroupMarkdown`，返回 `QqApi.Result`（带平台错误码） |
-| `msg_seq` 单调递增（**仅**被动回复带） | `qq/QqApi#addReplyFields` |
-| 失败分流：频控退避重试 / Markdown 降级 / 权限类入队 | `bridge/ChatRelay#sendActive` / `#send` |
-| 主动推送失败 → 被动兜底队列（≤5 条/msg_id） | `bridge/ChatRelay#push` / `#onInboundMsgId` |
-| 被动回复优先（@ 后 4 分钟内复用 msg_id） | `bridge/ChatRelay#takePassiveMsgId` |
-| 限速两道闸（间隔 + 每分钟配额） | `util/RateLimiter` |
+| `msg_type` 0/2 双通道 | `qq/QqApi#sendGroupText` / `#sendGroupMarkdown` |
+| `msg_seq` 单调递增 | `qq/QqApi` 的 `AtomicLong msgSeq` |
+| 主动推送失败 → 留在队列等 @ 冲刷（≤5 条/msg_id），期间每 60 秒重试一次主动 | `bridge/ChatRelay#sendLoop` / `#deliver` / `#onInboundMsgId` |
 | Hello/Identify/Heartbeat/Resume/退避 | `qq/QqGateway.java` |
-| 群自动绑定（首条 @ 消息，**不受任何转发开关影响**） | `bridge/QqIngress#onGroupMessage` |
+| 群自动绑定（首条 @ 消息） | `bridge/QqIngress#onGroupMessage` |

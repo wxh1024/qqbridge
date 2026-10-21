@@ -24,7 +24,7 @@ import org.slf4j.LoggerFactory;
  *   玩家进入视野       ──▶ ProximityAlert ──▶ ChatRelay ──▶ QQ 群
  *   QQ 群 @机器人     ──▶ QqGateway ──▶ QqIngress ──▶ 游戏聊天
  *   QQ 群 @机器人 /l  ──▶ QqGateway ──▶ QqIngress ──▶ PearlTug ──▶ BaritoneNavigator
- *   QQ 群 @机器人 msg_id ──▶ ChatRelay 被动兜底队列冲刷（仅绑定群，见 onInboundMsgId）
+ *   QQ 群 @机器人 msg_id ──▶ ChatRelay 唤醒出站队列（改用被动回复补发，仅绑定群，见 onInboundMsgId）
  */
 public final class QqBridgeClient implements ClientModInitializer {
 	public static final String MOD_ID = "qqbridge";
