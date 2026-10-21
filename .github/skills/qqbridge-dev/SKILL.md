@@ -26,7 +26,7 @@ agent_created: true
 | `config/QqBridgeConfig.java` | `config/qq_bridge.json` 读写、字段默认值、格式串 | README 配置表必须同步 |
 | `bridge/ChatRelay.java` | 游戏→QQ 出站：**统一队列**（单 worker 逐条发，失败留队首→等 @ 被动补发或 1 分钟后重试主动）、限速、Markdown/纯文本选择 | 出站消息表现 |
 | `bridge/ProximityAlert.java` | tick 级玩家集合 diff + 冷却去重 | 视野提醒频率 |
-| `bridge/QqIngress.java` | QQ→游戏 入站：群绑定、`send`/`local` 两模式、`/l` 与聊天推送指令分流 | 游戏内可见性 |
+| `bridge/QqIngress.java` | QQ→游戏 入站：群绑定、`send`/`local` 两模式、`/l` 与聊天推送指令分流（顺序：绑群 → 推送开关 → `/l` → `forwardQqToGame` → 普通聊天） | 游戏内可见性 |
 | `bridge/ChatPushSwitch.java` | 群内 `/开启聊天推送` / `/关闭聊天推送`：校验 `member_role`（仅 owner/admin）、写回 `syncChatToQq` + `syncGameMessagesToQq`、双通道回执 | 谁能开关推送、配置持久化 |
 | `bridge/PearlTug.java` | 拉珍珠状态机：扫描告示牌 → 选目标 → 寻路 → 转头 → 右键 → 提示 | 拉珍珠行为与文案 |
 | `bridge/BaritoneNavigator.java` | 男中音 API 薄封装（`GoalNear` / `isPathing` / `cancelEverything`） | 自动寻路是否可用 |

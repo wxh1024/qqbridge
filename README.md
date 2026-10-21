@@ -66,7 +66,7 @@ Minecraft Java 版 **Fabric 1.21.11 客户端模组**——把游戏内聊天与
 | `groupOpenid` | 空 | 绑定群；**留空则收到首条 @机器人 消息时自动绑定** |
 | `syncChatToQq` | `true` | 玩家聊天 → QQ（群内 `/开启聊天推送`、`/关闭聊天推送` 会改它） |
 | `syncGameMessagesToQq` | `true` | 系统消息 → QQ（同上，跟着聊天推送开关一起切） |
-| `forwardQqToGame` | `true` | QQ → 游戏 |
+| `forwardQqToGame` | `true` | QQ → 游戏 的**普通聊天**转发。关掉后只影响这一条路：`/l` 拉珍珠、`/开启|关闭聊天推送` 依然可用（它们不是聊天转发，一个是本地动作、一个改的是反方向） |
 | `notifyPlayerEnter` | `true` | 视野进入提醒 |
 | `chatPushCommandEnabled` | `true` | 允许群内用 `/开启聊天推送`、`/关闭聊天推送` 指令 |
 | `chatPushCommandRequireAdmin` | `true` | `true` = 只有群主/管理员能改；`false` = 群内任何人都能改（事件不带 `member_role` 时用它兜底） |
@@ -115,6 +115,8 @@ Minecraft Java 版 **Fabric 1.21.11 客户端模组**——把游戏内聊天与
 ## 拉珍珠（QQ 遥控交互）
 
 群里发 **@机器人 `/l <文字>`**（`/l` 后面直接跟文字也认，例如 `/l珍珠A`）。模组会在角色身上跑一套状态机：**扫描 → 选目标 → 男中音寻路 → 转头 → 右键 → 回推结果**。
+
+> `/l` 是**纯本地动作**，不往服务器发任何聊天，所以 **不受 `forwardQqToGame` 影响**（关掉 QQ→游戏 转发后照样能遥控），也**不受聊天推送开关影响**（`/关闭聊天推送` 后结果照样回推 QQ）。想停掉它只有两个开关：`pearlCommandEnabled`（总开关）、`pearlFeedbackToQq`（只停 QQ 回推）。
 
 ### 搜索范围
 
