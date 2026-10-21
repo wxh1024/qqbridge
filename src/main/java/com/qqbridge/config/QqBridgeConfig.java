@@ -41,8 +41,17 @@ public final class QqBridgeConfig {
 	public String qqToGameMode = "send";
 	/** 同一玩家重复进入视野的提醒冷却（秒） */
 	public int playerEnterCooldownSeconds = 60;
-	/** 出站到 QQ 的最小间隔（毫秒），远低于群 20qpm 的平台频控 */
-	public int sendIntervalMs = 1200;
+	/**
+	 * 出站到 QQ 的最小间隔（毫秒）。
+	 * <b>别设太小</b>：1.2 秒/条 = 50 条/分，直接超过平台「单群主动消息 20 条/分」的频控（40034100）。
+	 * 默认 3200ms ≈ 18 条/分，配合 {@link #maxMessagesPerMinute} 的滚动窗口一起卡。
+	 */
+	public int sendIntervalMs = 3200;
+	/**
+	 * 出站每分钟上限（滚动 60 秒窗口，主动 + 被动共用出口）。
+	 * 平台单群主动消息 20 条/分、1000 条/天；默认 18 留余量。<= 0 按 18 处理。
+	 */
+	public int maxMessagesPerMinute = 18;
 	/** 被动兜底队列上限（主动推送失败时暂存，等下一条 @机器人 消息冲刷） */
 	public int maxPendingMessages = 50;
 	/**
@@ -114,19 +123,37 @@ public final class QqBridgeConfig {
 	 * 但游戏聊天框不解析 Markdown，那串 {@code **} 会原样显示；这里去掉星号。
 	 * 老配置里遗留的 {@code pearlForwardCommand} 字段已被移除，Gson 会忽略它，
 	 * 下次 {@link #save()} 时自然消失。
+	 *
+	 * <p>1.4.0：
+	 * <ul>
+	 *   <li>老默认 {@code sendIntervalMs=1200}（= 50 条/分）会撞平台单群 20 条/分的主动消息频控，
+	 *       这里把任何小于 3000ms 的值抬到 3200ms；</li>
+	 *   <li>新增 {@code maxMessagesPerMinute}，老配置里缺这个字段（= 0）时补 18。</li>
+	 * </ul>
 	 */
 	private boolean migrate() {
+		boolean changed = false;
 		if (qqToGameFormat == null || qqToGameFormat.isEmpty()) {
 			qqToGameFormat = "{name}: {message}";
-			return true;
-		}
-		if (qqToGameFormat.contains("**")) {
+			changed = true;
+		} else if (qqToGameFormat.contains("**")) {
 			qqToGameFormat = qqToGameFormat.replace("**", "").trim();
 			QqBridgeClient.LOGGER.info("QQ聊天桥：已把 qqToGameFormat 的 Markdown 标记去掉（游戏内只显示纯文本）：{}",
 					qqToGameFormat);
-			return true;
+			changed = true;
 		}
-		return false;
+
+		if (sendIntervalMs > 0 && sendIntervalMs < 3000) {
+			sendIntervalMs = 3200;
+			QqBridgeClient.LOGGER.info("QQ聊天桥：sendIntervalMs 由过快值抬到 3200ms"
+					+ "（平台单群主动消息上限 20 条/分，原值会触发 40034100 频控）");
+			changed = true;
+		}
+		if (maxMessagesPerMinute <= 0) {
+			maxMessagesPerMinute = 18;
+			changed = true;
+		}
+		return changed;
 	}
 
 	public void save() {

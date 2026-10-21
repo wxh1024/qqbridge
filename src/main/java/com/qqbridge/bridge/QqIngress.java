@@ -30,11 +30,12 @@ public final class QqIngress {
 	}
 
 	public void onGroupMessage(QqGroupMessage msg) {
-		if (!config.isConfigured() || !config.forwardQqToGame) {
+		if (!config.isConfigured()) {
 			return;
 		}
 
-		// 首条消息自动绑定群
+		// 首条消息自动绑定群 —— 必须在任何功能开关之前：
+		// 绑定失败会让出站永远拿不到 groupOpenid，所有主动消息只能堆在兜底队列里发不出去。
 		if (config.groupOpenid == null || config.groupOpenid.isEmpty()) {
 			config.groupOpenid = msg.groupOpenid;
 			config.save();
@@ -42,6 +43,9 @@ public final class QqIngress {
 		}
 		if (!config.groupOpenid.equals(msg.groupOpenid)) {
 			return; // 只桥接绑定的那个群
+		}
+		if (!config.forwardQqToGame) {
+			return; // 绑群照做，只是不再把群消息落进游戏
 		}
 		if (msg.content.isEmpty()) {
 			return;

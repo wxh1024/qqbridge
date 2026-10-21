@@ -24,17 +24,17 @@ agent_created: true
 |---|---|---|
 | `QqBridgeClient.java` | 入口，装配所有组件并注册 Fabric 事件 | 所有链路 |
 | `config/QqBridgeConfig.java` | `config/qq_bridge.json` 读写、字段默认值、格式串 | README 配置表必须同步 |
-| `bridge/ChatRelay.java` | 游戏→QQ 出站：限速、被动兜底队列、Markdown/纯文本选择 | 出站消息表现 |
+| `bridge/ChatRelay.java` | 游戏→QQ 出站：两道限速、失败分流（退避重试／降级纯文本／入队等 @）、被动回复优先 | 出站消息表现 |
 | `bridge/ProximityAlert.java` | tick 级玩家集合 diff + 冷却去重 | 视野提醒频率 |
-| `bridge/QqIngress.java` | QQ→游戏 入站：群绑定、`send`/`local` 两模式、`/l` 指令分流 | 游戏内可见性 |
+| `bridge/QqIngress.java` | QQ→游戏 入站：群绑定（**不受任何开关影响**）、`send`/`local` 两模式、`/l` 指令分流 | 游戏内可见性、出站能否拿到 groupOpenid |
 | `bridge/PearlTug.java` | 拉珍珠状态机：扫描告示牌 → 选目标 → 寻路 → 转头 → 右键 → 提示 | 拉珍珠行为与文案 |
 | `bridge/BaritoneNavigator.java` | 男中音 API 薄封装（`GoalNear` / `isPathing` / `cancelEverything`） | 自动寻路是否可用 |
 | `qq/QqAuth.java` | `getAppAccessToken`，7200s 生命周期、到期前 60s 刷新 | 401 类问题 |
-| `qq/QqApi.java` | 发群消息（`msg_type=0` 文本 / `msg_type=2` Markdown）、`msg_seq`、401 自愈重试 | 发送失败排查 |
+| `qq/QqApi.java` | 发群消息（`msg_type=0` 文本 / `msg_type=2` Markdown）、返回 `Result`（含平台错误码）、`msg_seq` 仅被动回复带、401 自愈重试 | 发送失败排查 |
 | `qq/QqGateway.java` | `/gateway` + WebSocket：Hello/Identify/Heartbeat/Resume、指数退避重连 | 收不到事件 |
 | `qq/QqGroupMessage.java` | `GROUP_AT_MESSAGE_CREATE` 事件解析、剥离 `<@!...>` 提及标记 | 入站内容 |
 | `util/MarkdownUtil.java` | 动态值转义 + 引用块包装 | QQ 端排版 |
-| `util/RateLimiter.java` | 单线程最小间隔限速 | 平台频控 |
+| `util/RateLimiter.java` | 单线程限速：最小间隔 + 每分钟滚动窗口配额 | 平台频控 |
 
 数据流四条：
 
@@ -120,7 +120,8 @@ QQ 群 @机器人 msg_id ──▶ ChatRelay 被动兜底队列冲刷
 | 现象 | 优先怀疑 |
 |---|---|
 | 日志 `获取QQ access_token失败` / HTTP 401 | `appId`/`clientSecret` 错，或 `sandbox` 与平台环境不匹配；`QqAuth` 会自动重取一次 |
-| 日志 `QQ发群消息失败` HTTP 4xx | 主动推送被拒 → 群主没在机器人设置页开「推送开关」；消息会进 `pendingPassive` 等下次 @ 冲刷 |
+| 日志 `QQ发群消息失败` code=40034105 | 群侧没开「机器人主动在群聊内发言」（QQ 里点机器人头像 → 机器人设置页）；插件会打印中文指引并入 `pendingPassive`，等下次 @ 补发 |
+| 日志 `QQ发群消息失败` code=40034100 | 主动消息超频控（每群 20 条/分、1000 条/天）；先看 `sendIntervalMs` 与 `maxMessagesPerMinute`，`60000/间隔` 就是每分钟条数 |
 | 完全收不到群消息 | 机器人没拉进群 / 群聊能力没开 / 消息没 @机器人（默认只订阅 @ 消息）；先确认日志有 `READY` |
 | 群绑定错乱 | `groupOpenid` 留空时**首条** @ 消息的群会被自动绑定并写回配置；换群要手动改配置 |
 | 群里的消息又被刷回 QQ 一遍 | `qqToGameMode = send` 的固有效果（已无回显抑制）：本条被服务器回显 → 聊天钩子再推 QQ。改用 `local`，或关 `syncChatToQq` |
