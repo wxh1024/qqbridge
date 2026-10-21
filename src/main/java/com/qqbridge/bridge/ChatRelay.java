@@ -27,15 +27,16 @@ import java.util.concurrent.atomic.AtomicInteger;
  *    优先用那条消息的 {@code msg_id} 做<b>被动回复</b>，最多 5 条——既不吃主动消息配额，
  *    也不受群侧「机器人主动在群聊内发言」开关的限制。
  *
- * <p>④ 发不出去怎么办（不丢消息）：消息<b>留在队首</b>，之后的行为是
- *    「<b>等被动机会</b> 或 <b>等 1 分钟再主动试一次</b>」——两条路谁先来走谁：
+ * <p>④ 发不出去怎么办：<b>按平台错误码分流</b>，不再一刀切「留在队首一直重试」——
+ *    后者会让一条永远发不出去的消息把整个队列堵死（实测 243 次/分钟的无效重试）。
  *    <ul>
- *       <li>群里有人 @机器人 → 立刻拿到新 {@code msg_id} → worker 被唤醒、退避清零，
- *           用被动回复把它和后面的积压一起发出去；</li>
- *       <li>1 分钟内没人 @ → 退避到期，自己再发一次主动消息。</li>
+ *       <li>内容违规（40034006 等）→ <b>直接丢弃这条</b>，日志打出被丢的内容，队列继续往下走；</li>
+ *       <li>被动回复窗口/次数超限（40034128）→ 作废当前 msg_id，回退主动消息；</li>
+ *       <li>频控（40034100）等暂时性失败 → 留在队首，退避 1 分钟；期间有人 @机器人 就立刻
+ *           用被动回复补发；</li>
+ *       <li>同一条消息累计失败 {@link #MAX_ATTEMPTS_PER_MESSAGE} 次 → 判定为永远发不出去，
+ *           丢弃并告警，避免队头阻塞。</li>
  *    </ul>
- *    仍然失败就继续按这个规则循环（等价于回退到老机制：消息一直在队列里等 @ 冲刷，
- *    期间每分钟主动探一次），既不丢消息，也不会无限快速重试把日志刷爆。
  *
  * <p>⑤ 群隔离：被动回复的 {@code msg_id} 只在它所属那个群有效，未绑定群的 @消息 一律不碰队列。
  */
@@ -47,9 +48,14 @@ public final class ChatRelay {
 	private static final int MAX_PASSIVE_REPLIES = 5;
 	/** 发送失败后的等待间隔：期间来 @机器人 就立刻发，否则到点自己再试一次主动消息 */
 	private static final long RETRY_INTERVAL_MS = 60_000L;
+	/** 同一条消息最多失败几次；到顶就丢弃，避免一条坏消息卡死整个队列 */
+	private static final int MAX_ATTEMPTS_PER_MESSAGE = 5;
+	/** 被动 msg_id 作废后，隔多久改走主动消息（几毫秒就够，给队列一点呼吸） */
+	private static final long PASSIVE_SWITCH_BACKOFF_MS = 500L;
 
 	private final QqBridgeConfig config;
 	private final QqApi api;
+	/** 两次请求之间的最小间隔（取配置 {@code sendIntervalMs}，主动/被动共用） */
 	private final RateLimiter limiter;
 
 	/** 统一出站队列：所有消息按到达顺序排这里，worker 单线程逐条发，成功才出队 */
@@ -68,6 +74,9 @@ public final class ChatRelay {
 	private final AtomicInteger passiveReplies = new AtomicInteger();
 	/** 退避到什么时候；当前时刻大于它才允许再发（0 = 不在退避） */
 	private volatile long retryNotBefore;
+	/** 队首是哪条消息 + 它已经失败过几次（成功/换队首/丢弃时归零） */
+	private String headText;
+	private int headAttempts;
 
 	public ChatRelay(QqBridgeConfig config, QqApi api) {
 		this.config = config;
@@ -128,7 +137,7 @@ public final class ChatRelay {
 
 	// ==================== worker：唯一的发送者 ====================
 
-	/** 队列循环：等到「可发」→ 发队首 → 成功出队，失败留在队首进入退避 */
+	/** 队列循环：等到「可发」→ 发队首 → 按结果决定 出队 / 丢弃 / 退避 */
 	private void sendLoop() {
 		while (!Thread.currentThread().isInterrupted()) {
 			try {
@@ -137,14 +146,51 @@ public final class ChatRelay {
 				if (text == null) {
 					continue;
 				}
-				if (deliver(text)) {
-					queue.pollFirst();
-					continue;
+				if (headText == null || !headText.equals(text)) {
+					headText = text; // 队首换了：重试计数归零
+					headAttempts = 0;
 				}
-				retryNotBefore = System.currentTimeMillis() + RETRY_INTERVAL_MS;
-				QqBridgeClient.LOGGER.warn("QQ聊天桥：出站消息发送失败，保留在队列（共 {} 条）；"
-								+ "等 @机器人 用被动回复补发，或 {} 秒后再试一次主动消息",
-						queue.size(), RETRY_INTERVAL_MS / 1000);
+
+				QqApi.SendResult result = deliver(text);
+				switch (result) {
+					case OK -> {
+						queue.pollFirst();
+						resetHead();
+						retryNotBefore = 0;
+					}
+					case REJECTED -> {
+						// 违规内容：重发多少次都是违规，直接跳过继续发后面的
+						queue.pollFirst();
+						resetHead();
+						retryNotBefore = 0;
+						QqBridgeClient.LOGGER.warn("QQ聊天桥：该条被平台判为违规，已跳过并继续发后续消息：{}",
+								preview(text));
+					}
+					case PASSIVE_EXPIRED -> {
+						// 这个 msg_id 的窗口/次数已经用完，留着它只会无限重试同一个死 id
+						passiveMsgId = null;
+						passiveReplies.set(0);
+						retryNotBefore = System.currentTimeMillis() + PASSIVE_SWITCH_BACKOFF_MS;
+						QqBridgeClient.LOGGER.warn("QQ聊天桥：被动回复窗口/次数已用尽，改走主动消息（队列剩 {} 条）",
+								queue.size());
+					}
+					case RETRYABLE, AUTH_FAILED -> {
+						headAttempts++;
+						int attempts = headAttempts;
+						if (attempts >= MAX_ATTEMPTS_PER_MESSAGE) {
+							queue.pollFirst();
+							resetHead();
+							retryNotBefore = 0;
+							QqBridgeClient.LOGGER.warn("QQ聊天桥：该条重试 {} 次仍失败（{}），丢弃以免堵死队列：{}",
+									attempts, result, preview(text));
+						} else {
+							retryNotBefore = System.currentTimeMillis() + RETRY_INTERVAL_MS;
+							QqBridgeClient.LOGGER.warn("QQ聊天桥：出站消息发送失败（{}，第 {}/{} 次），保留在队列（共 {} 条）；"
+											+ "等 @机器人 用被动回复补发，或 {} 秒后再试一次主动消息",
+									result, attempts, MAX_ATTEMPTS_PER_MESSAGE, queue.size(), RETRY_INTERVAL_MS / 1000);
+						}
+					}
+				}
 			} catch (InterruptedException e) {
 				Thread.currentThread().interrupt();
 				return;
@@ -179,37 +225,41 @@ public final class ChatRelay {
 	}
 
 	/** 发一条：有被动窗口就走被动回复（不吃主动配额），否则按频率发主动消息 */
-	private boolean deliver(String text) {
+	private QqApi.SendResult deliver(String text) {
 		String group = config.groupOpenid;
 		if (group == null || group.isEmpty()) {
-			return false;
+			return QqApi.SendResult.RETRYABLE;
 		}
 
+		// 两次请求之间保留配置的间隔——被动通道也走限速。
+		// 之前被动通道跳过限速，一旦 msg_id 作废就会变成每秒数次的无效轰炸。
+		limiter.acquire();
 		String msgId = takePassiveMsgId();
-		boolean passive = msgId != null;
-		if (!passive) {
-			limiter.acquire(); // 主动消息之间保持最小间隔
-			// 限速等待期间可能来了 @消息，那就改用被动回复（同时省下一次主动配额）
-			msgId = takePassiveMsgId();
-			passive = msgId != null;
+		QqApi.SendResult result = sendToQq(group, text, msgId);
+		if (result.isOk() && msgId != null) {
+			passiveReplies.incrementAndGet();
 		}
-
-		boolean ok = sendToQq(group, text, msgId);
-		if (ok) {
-			if (passive) {
-				passiveReplies.incrementAndGet();
-			}
-			retryNotBefore = 0;
-		}
-		return ok;
+		return result;
 	}
 
 	/** 按配置的 {@code markdownToQq} 选择发送通道（Markdown 或纯文本） */
-	private boolean sendToQq(String group, String text, String msgId) {
+	private QqApi.SendResult sendToQq(String group, String text, String msgId) {
 		if (config.markdownToQq) {
 			return api.sendGroupMarkdown(group, text, msgId);
 		}
 		return api.sendGroupText(group, text, msgId);
+	}
+
+	/** 队首被成功发出或丢弃后重置重试计数 */
+	private void resetHead() {
+		headText = null;
+		headAttempts = 0;
+	}
+
+	/** 日志里展示待发内容（单行 + 截断，避免刷屏） */
+	private static String preview(String text) {
+		String oneLine = text.replace('\n', ' ').replace('\r', ' ');
+		return oneLine.length() <= 80 ? oneLine : oneLine.substring(0, 79) + "…";
 	}
 
 	/** 取当前可用的被动回复 msg_id；窗口过期或次数用尽返回 null（退回主动消息） */
