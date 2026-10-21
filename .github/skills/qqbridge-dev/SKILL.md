@@ -102,9 +102,18 @@ QQ 群 @机器人 msg_id ──▶ ChatRelay 被动兜底队列冲刷
 ### F. 发版
 
 1. 同步升 `gradle.properties` 的 `version` 与 `mod_version`（`fabric.mod.json` 用 `${version}` 占位自动取值）。
-2. commit + push，等 CI「构建」工作流通过。
-3. `gh release create v<version> --title ... --notes ...`，可附 CI 产物 jar。
-4. 产物获取：仓库 → Actions → 最新「构建」→ Artifacts → `QQ聊天桥`（上传 `build/libs/*.jar`，已排除 sources jar）。
+2. commit + push，等 CI「构建」工作流通过（`gh run watch <id> --exit-status`）。
+3. 取产物并上传附件：
+   ```
+   gh run download <run-id> -D /tmp/art            # → /tmp/art/QQ聊天桥/QQ聊天桥-<version>.jar
+   cp "/tmp/art/QQ聊天桥/QQ聊天桥-<version>.jar" /tmp/art/qqbridge-v<version>.jar
+   gh release create v<version> /tmp/art/qqbridge-v<version>.jar --title ... --notes-file <utf8.md>
+   ```
+   **release 附件名必须 ASCII**（`qqbridge-v<version>.jar`）：GitHub 会清洗非 ASCII 资产名，
+   `QQ聊天桥-1.3.0.jar` 会变成 `QQ.-1.3.0.jar`。改名用 `gh api -X PATCH repos/<owner>/<repo>/releases/assets/<id> -f name=...`。
+   中文名只保留在工程内（`settings.gradle` 的 `rootProject.name`、CI Artifact 名）。
+4. 说明/标题含中文时用 `--notes-file <文件>` 传（写 UTF-8 文件），别直接塞进命令行参数——Windows 下 bash → gh.exe 会丢字。
+5. 产物获取：仓库 → Actions → 最新「构建」→ Artifacts → `QQ聊天桥`（上传 `build/libs/*.jar`，已排除 sources jar）。
 
 ## 排障对照表
 
