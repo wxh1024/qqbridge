@@ -7,7 +7,7 @@
 	"authors": [
 		"QQ聊天桥"
 	],
-	"license": "MIT",
+	"license": "AGPL-3.0",
 	"environment": "client",
 	"entrypoints": {
 		"client": [
