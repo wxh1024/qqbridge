@@ -1,4 +1,4 @@
-package com.qqbridge.util;
+package com.qqbridge.shared;
 
 /**
  * 最小间隔限速器（单线程使用）。

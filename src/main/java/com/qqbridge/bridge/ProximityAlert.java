@@ -1,5 +1,6 @@
 package com.qqbridge.bridge;
 
+import com.qqbridge.bridge.chat.ChatRelay;
 import com.qqbridge.config.QqBridgeConfig;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.player.PlayerEntity;

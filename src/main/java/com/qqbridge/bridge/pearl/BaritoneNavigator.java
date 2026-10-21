@@ -1,10 +1,10 @@
-package com.qqbridge.bridge;
+package com.qqbridge.bridge.pearl;
 
 import baritone.api.BaritoneAPI;
 import baritone.api.IBaritone;
 import baritone.api.pathing.goals.GoalNear;
 import baritone.api.process.ICustomGoalProcess;
-import com.qqbridge.QqBridgeClient;
+import com.qqbridge.shared.Log;
 import net.minecraft.util.math.BlockPos;
 
 /**
@@ -33,7 +33,7 @@ public final class BaritoneNavigator {
 			process.setGoalAndPath(new GoalNear(pos, Math.max(1, radius)));
 			return true;
 		} catch (Throwable t) {
-			QqBridgeClient.LOGGER.warn("QQ聊天桥：男中音寻路请求失败：{}", t.toString());
+			Log.LOGGER.warn("QQ聊天桥：男中音寻路请求失败：{}", t.toString());
 			return false;
 		}
 	}

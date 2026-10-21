@@ -4,9 +4,7 @@ plugins {
 }
 
 repositories {
-	// Add repositories to retrieve artifacts from in here.
-	// You should only use this when depending on other mods because
-	// Loom adds the essential maven repositories to download Minecraft and libraries from automatically.
+	mavenCentral() // 仅用于拉取单元测试的 JUnit，运行时零第三方依赖不变
 }
 
 dependencies {
@@ -22,6 +20,14 @@ dependencies {
 	// 运行时由玩家自行把 Baritone 放进 mods/；未装时拉珍珠寻路能力自动禁用（FabricLoader.isModLoaded 守门）。
 	// 该 jar 在 libs/ 入库，保证 CI 也能编译。
 	modCompileOnly files("libs/baritone-1.21.11-2026.jar")
+
+	// 单元测试（纯 Java 单测，覆盖格式化/协议编解码/指令解析/错误码映射）
+	testImplementation "org.junit.jupiter:junit-jupiter:5.10.2"
+	testRuntimeOnly "org.junit.platform:junit-platform-launcher:1.10.2"
+}
+
+test {
+	useJUnitPlatform()
 }
 
 processResources {

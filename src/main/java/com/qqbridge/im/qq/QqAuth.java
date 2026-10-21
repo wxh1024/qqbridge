@@ -1,9 +1,9 @@
-package com.qqbridge.qq;
+package com.qqbridge.im.qq;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import com.qqbridge.QqBridgeClient;
 import com.qqbridge.config.QqBridgeConfig;
+import com.qqbridge.shared.Log;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -70,7 +70,7 @@ public final class QqAuth {
 			// expires_in 官方示例里是字符串，宽容解析
 			long expiresIn = Long.parseLong(json.get("expires_in").getAsString());
 			expiresAtMillis = System.currentTimeMillis() + expiresIn * 1000L;
-			QqBridgeClient.LOGGER.info("QQ聊天桥：access_token 已刷新，有效期 {}s", expiresIn);
+			Log.LOGGER.info("QQ聊天桥：access_token 已刷新，有效期 {}s", expiresIn);
 		} catch (Exception e) {
 			accessToken = null;
 			throw new IllegalStateException("获取QQ access_token失败（检查 appId/clientSecret 与网络）: " + e, e);
