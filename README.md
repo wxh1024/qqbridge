@@ -17,6 +17,8 @@ Minecraft Java 版 **Fabric 1.21.11 客户端模组**——把游戏内聊天与
 - `send`（默认）：作为你本人的聊天消息发给服务器，**全服可见**（内容带 `[QQ]` 前缀标记，回显不会再被转发回 QQ，无死循环）；
 - `local`：仅在桥接端本机聊天框显示。
 
+**出站消息用 Markdown 格式**（配置项 `markdownToQq`，默认 `true`）：游戏→QQ 的聊天/系统/视野提醒消息走 QQ 官方自定义 Markdown（`msg_type=2`），以引用块样式呈现，玩家名可加粗、格式串里可写 Markdown 语法；`{name}`/`{message}` 插入值自动转义，防止游戏内文字意外触发 Markdown 解析。关掉开关即退回纯文本。
+
 ## QQ 平台注意事项
 
 - **主动推送需要群主授权**：QQ 官方机器人 2025-04 曾下线主动消息，2025-06 回归的版本要求群主在手机 QQ 的「机器人设置页」手动打开**推送开关**（群内默认关闭）。不开的话，需求 1/3 的主动推送会被拒。
@@ -62,7 +64,8 @@ Minecraft Java 版 **Fabric 1.21.11 客户端模组**——把游戏内聊天与
 | `playerEnterCooldownSeconds` | `60` | 同一玩家重复提醒冷却 |
 | `sendIntervalMs` | `1200` | 出站最小间隔 |
 | `maxPendingMessages` | `50` | 被动兜底队列上限 |
-| `chatToQqFormat` 等 | 见文件 | 文案格式，`{name}` / `{message}` 占位 |
+| `markdownToQq` | `true` | 出站到 QQ 用 Markdown 格式（`msg_type=2`，自定义 Markdown，群聊/单聊已开放）；`false` = 退回纯文本 |
+| `chatToQqFormat` 等 | 见文件 | 文案格式，`{name}` / `{message}` 占位；`markdownToQq=true` 时可写 Markdown 语法（`**加粗**`、`## 标题`），插入值自动转义。⚠️ 若格式串本身以 `>` 开头，会再被外层引用块包裹（双重 `>>`），建议格式串不要自带 `>` 前缀 |
 | `qqPrefixMarker` | `"[QQ]"` | 回环抑制标记 |
 
 改完配置需重启游戏生效。

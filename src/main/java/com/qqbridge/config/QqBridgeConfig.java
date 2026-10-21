@@ -45,12 +45,17 @@ public final class QqBridgeConfig {
 	public int sendIntervalMs = 1200;
 	/** 被动兜底队列上限（主动推送失败时暂存，等下一条 @机器人 消息冲刷） */
 	public int maxPendingMessages = 50;
+	/**
+	 * 出站到 QQ 是否用 Markdown 格式（msg_type=2，自定义 Markdown，群聊/单聊已对所有机器人开放）。
+	 * false = 退回纯文本（msg_type=0）。建议保持 true——QQ 端呈现更醒目（标题/加粗/引用块）。
+	 */
+	public boolean markdownToQq = true;
 
-	// ===== 文案格式（{name}/{message} 占位）=====
-	public String chatToQqFormat = "[{name}] {message}";
+	// ===== 文案格式（{name}/{message} 占位；markdownToQq=true 时此处可写 Markdown 语法，如 **加粗**、## 标题）=====
+	public String chatToQqFormat = "**[{name}]** {message}";
 	public String gameToQqFormat = "[系统] {message}";
 	public String qqToGameFormat = "[QQ] {name}: {message}";
-	public String playerEnterFormat = "[视野] {name} 进入了视野";
+	public String playerEnterFormat = "**[视野]** {name} 进入了视野";
 	/** 回环抑制标记：出站到游戏的文本以此开头，聊天同步钩子见前缀即不再发往 QQ */
 	public String qqPrefixMarker = "[QQ]";
 
