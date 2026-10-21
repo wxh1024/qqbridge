@@ -1,8 +1,8 @@
 package com.qqbridge.bridge;
 
 import com.qqbridge.config.QqBridgeConfig;
-import net.minecraft.client.Minecraft;
-import net.minecraft.world.entity.player.Player;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.entity.player.PlayerEntity;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -26,8 +26,8 @@ public final class ProximityAlert {
 		this.relay = relay;
 	}
 
-	public void tick(Minecraft client) {
-		if (client.level == null || client.player == null) {
+	public void tick(MinecraftClient client) {
+		if (client.world == null || client.player == null) {
 			seen.clear();
 			return;
 		}
@@ -37,12 +37,12 @@ public final class ProximityAlert {
 		}
 
 		Map<UUID, String> now = new HashMap<>();
-		for (Player p : client.level.players()) {
+		for (PlayerEntity p : client.world.getPlayers()) {
 			if (p == client.player) {
 				continue; // 排除自己
 			}
-			UUID id = p.getUUID();
-			if (id.equals(client.player.getUUID())) {
+			UUID id = p.getUuid();
+			if (id.equals(client.player.getUuid())) {
 				continue;
 			}
 			now.put(id, p.getName().getString());

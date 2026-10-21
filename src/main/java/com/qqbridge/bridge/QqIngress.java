@@ -3,17 +3,17 @@ package com.qqbridge.bridge;
 import com.qqbridge.QqBridgeClient;
 import com.qqbridge.config.QqBridgeConfig;
 import com.qqbridge.qq.QqGroupMessage;
-import net.minecraft.client.Minecraft;
-import net.minecraft.network.chat.Component;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.text.Text;
 
 /**
  * QQ → 游戏 入站通道。
  *
  * 只处理绑定群的 @机器人 消息；首次收到消息时自动绑定 group_openid 并写回配置。
  * 落地两模式：
- *   "send"  （默认）→ {@code getConnection().sendChat(line)}：作为本人聊天消息发往服务器，
+ *   "send"  （默认）→ {@code getNetworkHandler().sendChatMessage(line)}：作为本人聊天消息发往服务器，
  *           全服可见（内容带 [QQ] 前缀标记，客户端回显不再回流 QQ）；
- *   "local" → 仅本机聊天框 {@code gui.getChat().addMessage(...)}。
+ *   "local" → 仅本机聊天框 {@code inGameHud.getChatHud().addMessage(...)}。
  */
 public final class QqIngress {
 	private final QqBridgeConfig config;
@@ -44,13 +44,13 @@ public final class QqIngress {
 				.replace("{name}", msg.senderName)
 				.replace("{message}", msg.content);
 
-		Minecraft mc = Minecraft.getInstance();
-		mc.execute(() -> {
+		MinecraftClient client = MinecraftClient.getInstance();
+		client.execute(() -> {
 			boolean localOnly = "local".equalsIgnoreCase(config.qqToGameMode);
-			if (!localOnly && mc.getConnection() != null) {
-				mc.getConnection().sendChat(line);
+			if (!localOnly && client.getNetworkHandler() != null) {
+				client.getNetworkHandler().sendChatMessage(line);
 			} else {
-				mc.gui.getChat().addMessage(Component.literal(line));
+				client.inGameHud.getChatHud().addMessage(Text.literal(line));
 			}
 		});
 	}

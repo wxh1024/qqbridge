@@ -82,7 +82,7 @@ Minecraft Java 版 **Fabric 1.21.11 客户端模组**——把游戏内聊天与
 
 ## 技术栈
 
-- Fabric 1.21.11 · Java 21（产物）· Loom `fabric-loom-remap` + Mojang 官方映射
+- Fabric 1.21.11 · Java 21（产物）· Loom `fabric-loom-remap` + Yarn 映射（`1.21.11+build.6`）
 - 零第三方运行时依赖：QQ 协议走 JDK 内置 `java.net.http`（HTTP + WebSocket），JSON 用游戏自带 Gson
 - 事件全部走 Fabric API（无 Mixin）：`ClientReceiveMessageEvents` / `ClientTickEvents` / `ClientLifecycleEvents`
 
