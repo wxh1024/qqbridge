@@ -41,14 +41,15 @@ public final class QqBridgeClient implements ClientModInitializer {
 		chatRelay = new ChatRelay(config, api);
 		ProximityAlert proximity = new ProximityAlert(config, chatRelay);
 
-		gateway = new QqGateway(config, auth, api, ingress, chatRelay);
+		gateway = new QqGateway(config, auth, api, ingress::onGroupMessage, chatRelay::onInboundMsgId);
 
 		// ① 游戏内聊天框消息 → QQ（玩家聊天 + 系统消息；跳过 actionbar 覆盖层）
 		ClientReceiveMessageEvents.CHAT.register((message, signedMessage, sender, params, receptionTimestamp) -> {
 			if (!config.syncChatToQq) {
 				return;
 			}
-			String name = sender != null ? sender.getName() : "?";
+			// authlib 7.x 起 GameProfile 是 record，访问器为 name()
+			String name = sender != null ? sender.name() : "?";
 			chatRelay.onPlayerChat(name, message.getString());
 		});
 		ClientReceiveMessageEvents.GAME.register((message, overlay) -> {
