@@ -56,8 +56,6 @@ public final class QqBridgeConfig {
 	public boolean pearlCommandEnabled = true;
 	/** 指令前缀：群消息以它开头即触发，前缀后面的全部文字作为要匹配的告示牌文本 */
 	public String pearlCommandPrefix = "/l";
-	/** 是否把指令原文也转发到游戏聊天（默认 false：只做本地动作，不刷全服聊天） */
-	public boolean pearlForwardCommand = false;
 	/** 告示牌搜索半径：水平（格），以收到指令时玩家所在方块为中心 */
 	public int pearlScanRadiusH = 16;
 	/** 告示牌搜索半径：垂直（格，上下各这么多） */
@@ -75,10 +73,14 @@ public final class QqBridgeConfig {
 	/** 拉珍珠回推 QQ 的格式串，{message} 为具体提示 */
 	public String pearlToQqFormat = "**拉珍珠** {message}";
 
-	// ===== 文案格式（{name}/{message} 占位；markdownToQq=true 时此处可写 Markdown 语法，如 **加粗**、## 标题）=====
+	// ===== 文案格式 =====
+	// 出站到 QQ 的三条（markdownToQq=true 时可写 Markdown 语法，如 **加粗**、## 标题）；
+	// 入站到游戏的那条（qqToGameFormat）只能用纯文本——游戏聊天框不解析 Markdown，
+	// 写 ** 只会被原样显示成一串星号。
 	public String chatToQqFormat = "{message}";
 	public String gameToQqFormat = "**[系统]** {message}";
-	public String qqToGameFormat = "**{name}**: {message}";
+	/** QQ→游戏 的落地文案：纯文本，{name} = 群昵称，{message} = 消息内容 */
+	public String qqToGameFormat = "{name}: {message}";
 	public String playerEnterFormat = "**[视野]** {name} 进入了视野";
 
 	public boolean isConfigured() {
@@ -90,6 +92,9 @@ public final class QqBridgeConfig {
 			try (Reader reader = Files.newBufferedReader(PATH, StandardCharsets.UTF_8)) {
 				QqBridgeConfig cfg = GSON.fromJson(reader, QqBridgeConfig.class);
 				if (cfg != null) {
+					if (cfg.migrate()) {
+						cfg.save();
+					}
 					return cfg;
 				}
 			} catch (Exception e) {
@@ -100,6 +105,28 @@ public final class QqBridgeConfig {
 		fresh.save();
 		QqBridgeClient.LOGGER.info("QQ聊天桥：已生成配置模板 {}", PATH);
 		return fresh;
+	}
+
+	/**
+	 * 把老版本配置就地升级，返回是否需要写回。
+	 *
+	 * <p>1.3.0 及以前的默认 {@code qqToGameFormat} 是 {@code **{name}**: {message}}，
+	 * 但游戏聊天框不解析 Markdown，那串 {@code **} 会原样显示；这里去掉星号。
+	 * 老配置里遗留的 {@code pearlForwardCommand} 字段已被移除，Gson 会忽略它，
+	 * 下次 {@link #save()} 时自然消失。
+	 */
+	private boolean migrate() {
+		if (qqToGameFormat == null || qqToGameFormat.isEmpty()) {
+			qqToGameFormat = "{name}: {message}";
+			return true;
+		}
+		if (qqToGameFormat.contains("**")) {
+			qqToGameFormat = qqToGameFormat.replace("**", "").trim();
+			QqBridgeClient.LOGGER.info("QQ聊天桥：已把 qqToGameFormat 的 Markdown 标记去掉（游戏内只显示纯文本）：{}",
+					qqToGameFormat);
+			return true;
+		}
+		return false;
 	}
 
 	public void save() {

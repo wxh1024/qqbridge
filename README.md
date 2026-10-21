@@ -66,10 +66,10 @@ Minecraft Java 版 **Fabric 1.21.11 客户端模组**——把游戏内聊天与
 | `sendIntervalMs` | `1200` | 出站最小间隔 |
 | `maxPendingMessages` | `50` | 被动兜底队列上限 |
 | `markdownToQq` | `true` | 出站到 QQ 用 Markdown 格式（`msg_type=2`，自定义 Markdown，群聊/单聊已开放）；`false` = 退回纯文本 |
-| `chatToQqFormat` 等 | 见文件 | 文案格式，`{name}` / `{message}` 占位；`markdownToQq=true` 时可写 Markdown 语法（`**加粗**`、`## 标题`），插入值自动转义。⚠️ 若格式串本身以 `>` 开头，会再被外层引用块包裹（双重 `>>`），建议格式串不要自带 `>` 前缀 |
+| `chatToQqFormat` 等 | 见文件 | 出站到 QQ 的文案格式，`{name}` / `{message}` 占位；`markdownToQq=true` 时可写 Markdown 语法（`**加粗**`、`## 标题`），插入值自动转义。⚠️ 若格式串本身以 `>` 开头，会再被外层引用块包裹（双重 `>>`），建议格式串不要自带 `>` 前缀 |
+| `qqToGameFormat` | `"{name}: {message}"` | **入站**到游戏内聊天框的文案，**只支持纯文本**——游戏聊天框不解析 Markdown，写 `**` 只会原样显示成星号 |
 | `pearlCommandEnabled` | `true` | 拉珍珠指令总开关 |
 | `pearlCommandPrefix` | `"/l"` | 指令前缀：群消息以它开头即触发，**前缀后面全部文字**（`/l珍珠A` 或 `/l 珍珠A`）作为要匹配的文本 |
-| `pearlForwardCommand` | `false` | 是否把 `/l …` 原样转发成游戏聊天（`send` 模式下会全服可见） |
 | `pearlScanRadiusH` / `pearlScanRadiusV` | `16` / `8` | 告示牌搜索半径：水平 ±16 格、垂直 ±8 格 |
 | `pearlTriggerDropDepth` | `2` | 触发块相对告示牌向下搜索的格数（1..8） |
 | `pearlGoalRadius` | `2` | 男中音 `GoalNear` 落点半径（走到距触发块 ≤2 格算到达） |
@@ -79,6 +79,9 @@ Minecraft Java 版 **Fabric 1.21.11 客户端模组**——把游戏内聊天与
 | `pearlToQqFormat` | `"**拉珍珠** {message}"` | 回推文案格式，`{message}` 为具体提示 |
 
 改完配置需重启游戏生效。
+
+> 1.3.1 起 `pearlForwardCommand` 已移除（拉珍珠指令**固定不转发**到游戏聊天），老配置里残留该字段会被忽略；
+> 老配置的 `qqToGameFormat` 若带 `**` 标记，首次加载时会自动去掉星号并写回。
 
 ## 拉珍珠（QQ 遥控交互）
 

@@ -14,7 +14,7 @@ import net.minecraft.text.Text;
  * 两类消息：
  *   ① <b>拉珍珠指令</b>（{@code pearlCommandPrefix}，默认 {@code /l <文字>}）→
  *      交给 {@link PearlTug} 在客户端主线程执行（扫描告示牌 → 男中音寻路 → 转头 → 点活板门/按钮），
- *      默认<b>不</b>转发成游戏聊天（{@code pearlForwardCommand} 可开）；
+ *      <b>不会</b>转发成游戏聊天（固定行为，无开关：避免把 {@code /l …} 刷到全服）；
  *   ② 普通消息 → 按 {@code qqToGameMode} 落地：
  *      "send"  （默认）→ {@code getNetworkHandler().sendChatMessage(line)}：作为本人聊天消息发往服务器，
  *               全服可见；
@@ -49,18 +49,11 @@ public final class QqIngress {
 
 		MinecraftClient client = MinecraftClient.getInstance();
 
-		// 拉珍珠指令：解析在 WS 线程做，执行必须切到客户端主线程
+		// 拉珍珠指令：解析在 WS 线程做，执行必须切到客户端主线程；
+		// 只做本地动作，绝不把指令原文发到游戏聊天（发了就是全服可见的 /l …）
 		if (pearlTug.isCommand(msg.content)) {
 			String argument = pearlTug.commandArgument(msg.content);
 			client.execute(() -> pearlTug.submit(client, argument));
-			if (config.pearlForwardCommand) {
-				client.execute(() -> {
-					String line = config.pearlCommandPrefix + " " + argument;
-					if (client.getNetworkHandler() != null) {
-						client.getNetworkHandler().sendChatMessage(line);
-					}
-				});
-			}
 			return;
 		}
 
