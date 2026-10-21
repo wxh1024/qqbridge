@@ -1,0 +1,13 @@
+pluginManagement {
+	repositories {
+		maven {
+			name = 'Fabric'
+			url = 'https://maven.fabricmc.net/'
+		}
+		mavenCentral()
+		gradlePluginPortal()
+	}
+}
+
+// 不写 rootProject.name：Gradle 默认取目录名（QQ聊天桥），
+// 产物 jar 自然是中文名 QQ聊天桥-<version>.jar，且 settings.gradle 保持纯 ASCII。

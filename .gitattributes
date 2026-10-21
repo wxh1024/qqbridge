@@ -1,0 +1,22 @@
+# 统一行尾入库为 LF，避免 core.autocrlf=true 造成 LF→CRLF 全文件噪声 diff
+* text=auto
+
+# 源码/构建脚本统一 LF
+*.java text eol=lf
+*.gradle text eol=lf
+*.properties text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+
+# Windows 脚本保持 CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制
+*.jar binary
+*.png binary
+gradlew text eol=lf

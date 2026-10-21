@@ -1,0 +1,21 @@
+# Gradle
+.gradle/
+build/
+out/
+
+# 本地运行目录（runClient/runServer 生成）
+run/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.ipr
+*.iws
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 敏感配置不入库（游戏目录里的 config/qq_bridge.json 与本仓库无关，此处兜底）
+qq_bridge.json
