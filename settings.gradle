@@ -9,5 +9,7 @@ pluginManagement {
 	}
 }
 
-// 不写 rootProject.name：Gradle 默认取目录名（QQ聊天桥），
-// 产物 jar 自然是中文名 QQ聊天桥-<version>.jar，且 settings.gradle 保持纯 ASCII。
+// 显式指定根项目名，保证产物 jar 恒为中文名「QQ聊天桥-<version>.jar」。
+// 不能靠目录名：工程可能被检出/移动到任意目录（如会话目录 2026-10-21-16-04-55）。
+// \uXXXX 转义让本文件保持纯 ASCII，GBK 平台也不会乱码。
+rootProject.name = "QQ\u804A\u5929\u6865"

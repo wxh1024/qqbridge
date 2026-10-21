@@ -19,3 +19,9 @@ Thumbs.db
 
 # 敏感配置不入库（游戏目录里的 config/qq_bridge.json 与本仓库无关，此处兜底）
 qq_bridge.json
+
+# WorkBuddy 会话数据（不属于工程本体）
+.workbuddy/
+
+# 本地随手放的第三方 jar
+/baritone-*.jar

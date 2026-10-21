@@ -1,0 +1,120 @@
+---
+name: qqbridge-dev
+description: QQ聊天桥（Fabric 1.21.11 纯客户端模组，仓库根目录即工程根）的开发与发版手册。当需要修改或扩展该模组（游戏聊天同步、视野进入提醒、QQ 群 @机器人 入站、Markdown 出站、配置项）、排查 QQ 官方机器人协议问题（access_token、WS 网关、主动/被动消息、频控、群 OpenID）、或调整 Gradle/CI 构建与发布产物时使用。
+agent_created: true
+---
+
+# QQ聊天桥 开发手册
+
+## 用途
+
+仓库**根目录自身就是工程根**（Fabric 1.21.11 **纯客户端**模组），把游戏内聊天与「玩家进入视野」提醒推送到 QQ 官方机器人所在的群，并把群内 @机器人 的消息转回游戏内聊天。本 skill 用于在该工程上做增量开发、排障和发版，避免重新推导构建配置、1.21.11 映射名与 QQ 协议细节。
+
+本 skill 随仓库一起版本化，位于 `.github/skills/qqbridge-dev/`；`.github/workflows/build.yml` 是同仓库的 CI 定义。
+
+## 项目边界（先确认再动手）
+
+- **单可信客户端桥接**：`appId`/`clientSecret` 明文存在 `config/qq_bridge.json`，只跑在服主/房管自己的机器上。任何改动都不得要求把凭证分发给普通玩家，也不得引入服务端组件。
+- **纯客户端**：`fabric.mod.json` 的 `environment` 固定为 `client`；不注册物品/方块/网络包，**不使用 Mixin**。
+- **零第三方运行时依赖**：HTTP/WebSocket 用 JDK `java.net.http`，JSON 用游戏自带的 Gson。新增依赖前先想清楚能否用 JDK 内置能力实现。
+
+## 代码地图
+
+| 文件 | 职责 | 改它会波及 |
+|---|---|---|
+| `QqBridgeClient.java` | 入口，装配所有组件并注册 Fabric 事件 | 所有链路 |
+| `config/QqBridgeConfig.java` | `config/qq_bridge.json` 读写、字段默认值、格式串 | README 配置表必须同步 |
+| `bridge/ChatRelay.java` | 游戏→QQ 出站：回环抑制、限速、被动兜底队列、Markdown/纯文本选择 | 出站消息表现 |
+| `bridge/ProximityAlert.java` | tick 级玩家集合 diff + 冷却去重 | 视野提醒频率 |
+| `bridge/QqIngress.java` | QQ→游戏 入站：群绑定、`send`/`local` 两模式 | 游戏内可见性 |
+| `qq/QqAuth.java` | `getAppAccessToken`，7200s 生命周期、到期前 60s 刷新 | 401 类问题 |
+| `qq/QqApi.java` | 发群消息（`msg_type=0` 文本 / `msg_type=2` Markdown）、`msg_seq`、401 自愈重试 | 发送失败排查 |
+| `qq/QqGateway.java` | `/gateway` + WebSocket：Hello/Identify/Heartbeat/Resume、指数退避重连 | 收不到事件 |
+| `qq/QqGroupMessage.java` | `GROUP_AT_MESSAGE_CREATE` 事件解析、剥离 `<@!...>` 提及标记 | 入站内容 |
+| `util/MarkdownUtil.java` | 动态值转义 + 引用块包装 | QQ 端排版 |
+| `util/RateLimiter.java` | 单线程最小间隔限速 | 平台频控 |
+
+数据流四条：
+
+```
+游戏聊天 / 系统消息 ──▶ ChatRelay ──▶ QqApi ──▶ QQ 群
+玩家进入视野        ──▶ ProximityAlert ──▶ ChatRelay ──▶ QQ 群
+QQ 群 @机器人       ──▶ QqGateway ──▶ QqIngress ──▶ 游戏聊天
+QQ 群 @机器人 msg_id ──▶ ChatRelay 被动兜底队列冲刷
+```
+
+## 硬性约定（违反会直接构建失败或产物不可用）
+
+1. **映射用 Yarn**：`mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"`，版本号在 `gradle.properties` 的 `yarn_mappings`（当前 `1.21.11+build.6`，必须与 `minecraft_version` 对齐）。插件 id 仍是 `net.fabricmc.fabric-loom-remap`。代码里用的是 Yarn 名 —— `MinecraftClient` / `Text` / `PlayerEntity` / `getNetworkHandler().sendChatMessage(...)` / `inGameHud.getChatHud().addMessage(...)` / `getUuid()`。**不要**混入 Mojang 官方名（`Component`、`Minecraft`、`sendChat`、`gui.getChat()`、`getUUID()`），Loom 的 remap 阶段会直接报找不到符号。新增代码拿不准签名时查 `references/minecraft-1.21.11-api.md`。
+2. **版本矩阵**：Loom `1.18.4` + Gradle wrapper `9.7.x`（Loom 1.18.4 的插件 API 要求）+ **JDK 25 运行 Gradle**，但 mod 产物编译为 **Java 21**（`options.release = 21`）。CI 与 README 都要保持这套说法。
+3. **UTF-8 编码必须保留**：`tasks.withType(JavaCompile) { options.encoding = "UTF-8" }`。源码含大量中文字符串与注释，删掉这行在 GBK 平台会乱码或编译失败。
+4. **中文产物名靠 `settings.gradle` 固定**：`rootProject.name = "QQ\u804A\u5929\u6865"`（\uXXXX 转义自带中文，文件保持纯 ASCII）。**不要删这行** —— 目录名可能是任意检出路径，删了 jar 就会变成目录名；GitHub 仓库名不支持中文（用 `qqbridge`）。`gradle.properties` 的 `mod_name` 同理用 `\uXXXX`。
+5. **不在本地跑 gradle**：改完直接 commit + push，让 GitHub Actions 构建，再读 CI 结果。本地只做零成本检查（读文件、grep、`git status`）。
+6. **面向用户的文案用中文**，日志前缀统一 `QQ聊天桥：`。
+
+## 线程模型（最容易写错的地方）
+
+- Fabric 事件（`ClientReceiveMessageEvents` / `ClientTickEvents` / `ClientLifecycleEvents`）在**客户端主线程**回调。
+- `QqGateway` 的 WS 回调在 `qqbridge-ws-connector` 守护线程，`ChatRelay` 出站走 `qqbridge-outbound` 单线程。
+- **任何触碰 `Minecraft` / 世界 / 聊天框的代码都必须包在 `mc.execute(...)` 里**（见 `QqIngress`）。反过来，网络请求不要放主线程。
+- 出站统一经 `ChatRelay.push(...)`，不要在业务类里直接调 `QqApi` —— 否则绕过限速与被动兜底队列。
+- 阻塞式网络调用（`http.send`、`closed.join()`）只允许出现在上述后台线程。
+
+## 改动配方
+
+### A. 新增一种「游戏 → QQ」事件（例：玩家死亡提醒）
+
+1. 在 `QqBridgeConfig` 加开关字段（默认 `true`）与可选格式串（`{name}` / `{message}` 占位）。
+2. 在 `ChatRelay` 加一个 `pushXxx(...)`，内部调 `format(config.xxxFormat, name, message)` 再 `push(...)`（自动获得限速 + 兜底）。
+3. 在 `QqBridgeClient` 注册对应 Fabric 事件，**回调里只做取值**，重活交给 `ChatRelay` 的后台线程。
+4. README 的功能表 / 配置表各加一行。
+
+### B. 新增配置项（四处都要改）
+
+`QqBridgeConfig` 字段 + 默认值 → `ChatRelay`/`QqIngress` 读取点 → README 配置表 → 视情况写进格式串说明。改完提醒用户：**改配置需重启游戏生效**（没有热重载）。
+
+### C. 新增 QQ 事件类型（例：单聊 `C2C_MESSAGE_CREATE`）
+
+1. `QqGateway.INTENT_GROUP_AND_C2C` 已含 `1 << 25`（群 + C2C），一般无需改 intents。
+2. `handleDispatch` 的 `switch (t)` 加分支 → 新解析类（仿 `QqGroupMessage`）→ 交给新的 ingress 方法。
+3. 注意被动回复要用事件里的 `id` 作为 `msg_id`，并决定是否接进 `ChatRelay.onInboundMsgId` 的兜底冲刷。
+
+### D. 调整 QQ 端呈现
+
+- 排版只由格式串 + `MarkdownUtil` 决定：模板里的 Markdown 语法原样保留，只有 `{name}`/`{message}` 插入值经 `escape()` 转义。
+- `wrap()` 已在外层加 `> ` 引用前缀，**格式串不要再自带 `> `**，否则会出现双重 `>>`。
+- 关 `markdownToQq` 即退回 `msg_type=0` 纯文本，此时格式串里的 Markdown 语法会原样显示。
+
+### E. 发版
+
+1. 同步升 `gradle.properties` 的 `version` 与 `mod_version`（`fabric.mod.json` 用 `${version}` 占位自动取值）。
+2. commit + push，等 CI「构建」工作流通过。
+3. `gh release create v<version> --title ... --notes ...`，可附 CI 产物 jar。
+4. 产物获取：仓库 → Actions → 最新「构建」→ Artifacts → `QQ聊天桥`（上传 `build/libs/*.jar`，已排除 sources jar）。
+
+## 排障对照表
+
+| 现象 | 优先怀疑 |
+|---|---|
+| 日志 `获取QQ access_token失败` / HTTP 401 | `appId`/`clientSecret` 错，或 `sandbox` 与平台环境不匹配；`QqAuth` 会自动重取一次 |
+| 日志 `QQ发群消息失败` HTTP 4xx | 主动推送被拒 → 群主没在机器人设置页开「推送开关」；消息会进 `pendingPassive` 等下次 @ 冲刷 |
+| 完全收不到群消息 | 机器人没拉进群 / 群聊能力没开 / 消息没 @机器人（默认只订阅 @ 消息）；先确认日志有 `READY` |
+| 群绑定错乱 | `groupOpenid` 留空时**首条** @ 消息的群会被自动绑定并写回配置；换群要手动改配置 |
+| 游戏内消息被刷回 QQ | `qqPrefixMarker`（默认 `[QQ]`）被改掉，回环抑制失效 |
+| QQ 端显示 `>>` | 格式串自带 `>` 前缀 |
+| 消息被截断 | `ChatRelay.MAX_CONTENT = 480`，超出加 `…` |
+| 消息重复/重复发送 | 被动回复同一 `msg_id` 最多 5 次，且 `msg_seq` 必须变化（`QqApi` 已用单调序号） |
+
+## 自检清单（不构建也能做）
+
+- [ ] 新增/改动的 Yarn 映射名在 `references/minecraft-1.21.11-api.md` 里有据可查
+- [ ] 所有触碰 `Minecraft` 的代码在 `mc.execute(...)` 内
+- [ ] 新配置项在 `QqBridgeConfig` 与 README 配置表双向一致
+- [ ] `build.gradle` 的 UTF-8 与 `release = 21` 未被改动
+- [ ] 出站仍走 `ChatRelay.push`，未绕过限速
+- [ ] push 后 CI「构建」工作流绿色
+
+## 参考
+
+- `references/qqbot-protocol.md` —— QQ 官方机器人接口速查（token、发消息、WS opcode、主动/被动约束、频控）
+- `references/minecraft-1.21.11-api.md` —— 本模组用到的 1.21.11 Yarn 映射名与 Fabric 事件签名
