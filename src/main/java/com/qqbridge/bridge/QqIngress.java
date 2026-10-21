@@ -17,7 +17,7 @@ import net.minecraft.text.Text;
  *      默认<b>不</b>转发成游戏聊天（{@code pearlForwardCommand} 可开）；
  *   ② 普通消息 → 按 {@code qqToGameMode} 落地：
  *      "send"  （默认）→ {@code getNetworkHandler().sendChatMessage(line)}：作为本人聊天消息发往服务器，
- *               全服可见（内容带 [QQ] 前缀标记，客户端回显不再回流 QQ）；
+ *               全服可见；
  *      "local" → 仅本机聊天框 {@code inGameHud.getChatHud().addMessage(...)}。
  */
 public final class QqIngress {

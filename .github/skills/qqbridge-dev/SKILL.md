@@ -24,7 +24,7 @@ agent_created: true
 |---|---|---|
 | `QqBridgeClient.java` | 入口，装配所有组件并注册 Fabric 事件 | 所有链路 |
 | `config/QqBridgeConfig.java` | `config/qq_bridge.json` 读写、字段默认值、格式串 | README 配置表必须同步 |
-| `bridge/ChatRelay.java` | 游戏→QQ 出站：回环抑制、限速、被动兜底队列、Markdown/纯文本选择 | 出站消息表现 |
+| `bridge/ChatRelay.java` | 游戏→QQ 出站：限速、被动兜底队列、Markdown/纯文本选择 | 出站消息表现 |
 | `bridge/ProximityAlert.java` | tick 级玩家集合 diff + 冷却去重 | 视野提醒频率 |
 | `bridge/QqIngress.java` | QQ→游戏 入站：群绑定、`send`/`local` 两模式、`/l` 指令分流 | 游戏内可见性 |
 | `bridge/PearlTug.java` | 拉珍珠状态机：扫描告示牌 → 选目标 → 寻路 → 转头 → 右键 → 提示 | 拉珍珠行为与文案 |
@@ -114,7 +114,7 @@ QQ 群 @机器人 msg_id ──▶ ChatRelay 被动兜底队列冲刷
 | 日志 `QQ发群消息失败` HTTP 4xx | 主动推送被拒 → 群主没在机器人设置页开「推送开关」；消息会进 `pendingPassive` 等下次 @ 冲刷 |
 | 完全收不到群消息 | 机器人没拉进群 / 群聊能力没开 / 消息没 @机器人（默认只订阅 @ 消息）；先确认日志有 `READY` |
 | 群绑定错乱 | `groupOpenid` 留空时**首条** @ 消息的群会被自动绑定并写回配置；换群要手动改配置 |
-| 游戏内消息被刷回 QQ | `qqPrefixMarker`（默认 `[QQ]`）被改掉，回环抑制失效 |
+| 群里的消息又被刷回 QQ 一遍 | `qqToGameMode = send` 的固有效果（已无回显抑制）：本条被服务器回显 → 聊天钩子再推 QQ。改用 `local`，或关 `syncChatToQq` |
 | QQ 端显示 `>>` | 格式串自带 `>` 前缀 |
 | 消息被截断 | `ChatRelay.MAX_CONTENT = 480`，超出加 `…` |
 | 消息重复/重复发送 | 被动回复同一 `msg_id` 最多 5 次，且 `msg_seq` 必须变化（`QqApi` 已用单调序号） |

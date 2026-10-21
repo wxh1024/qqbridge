@@ -15,7 +15,7 @@ Minecraft Java 版 **Fabric 1.21.11 客户端模组**——把游戏内聊天与
 
 **QQ → 游戏 的两种模式**（配置项 `qqToGameMode`）：
 
-- `send`（默认）：作为你本人的聊天消息发给服务器，**全服可见**（内容带 `[QQ]` 前缀标记，回显不会再被转发回 QQ，无死循环）；
+- `send`（默认）：作为你本人的聊天消息发给服务器，**全服可见**（注意：这条消息被服务器回显后会经聊天同步钩子再发回 QQ 一次，属该模式固有效果；不想看到重复回显就用 `local`）；
 - `local`：仅在桥接端本机聊天框显示。
 
 **出站消息用 Markdown 格式**（配置项 `markdownToQq`，默认 `true`）：游戏→QQ 的聊天/系统/视野提醒消息走 QQ 官方自定义 Markdown（`msg_type=2`），以引用块样式呈现，玩家名可加粗、格式串里可写 Markdown 语法；`{name}`/`{message}` 插入值自动转义，防止游戏内文字意外触发 Markdown 解析。关掉开关即退回纯文本。
@@ -67,7 +67,6 @@ Minecraft Java 版 **Fabric 1.21.11 客户端模组**——把游戏内聊天与
 | `maxPendingMessages` | `50` | 被动兜底队列上限 |
 | `markdownToQq` | `true` | 出站到 QQ 用 Markdown 格式（`msg_type=2`，自定义 Markdown，群聊/单聊已开放）；`false` = 退回纯文本 |
 | `chatToQqFormat` 等 | 见文件 | 文案格式，`{name}` / `{message}` 占位；`markdownToQq=true` 时可写 Markdown 语法（`**加粗**`、`## 标题`），插入值自动转义。⚠️ 若格式串本身以 `>` 开头，会再被外层引用块包裹（双重 `>>`），建议格式串不要自带 `>` 前缀 |
-| `qqPrefixMarker` | `"[QQ]"` | 回环抑制标记 |
 | `pearlCommandEnabled` | `true` | 拉珍珠指令总开关 |
 | `pearlCommandPrefix` | `"/l"` | 指令前缀：群消息以它开头即触发，**前缀后面全部文字**（`/l珍珠A` 或 `/l 珍珠A`）作为要匹配的文本 |
 | `pearlForwardCommand` | `false` | 是否把 `/l …` 原样转发成游戏聊天（`send` 模式下会全服可见） |

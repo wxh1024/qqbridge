@@ -13,11 +13,10 @@ import java.util.concurrent.Executors;
 /**
  * 游戏 → QQ 出站通道。
  *
- * ① 回环抑制：以 {@code qqPrefixMarker} 开头的文本（即本桥注入游戏的消息回显）不再发往 QQ；
- * ② Markdown 渲染：玩家名/消息内容经 {@link MarkdownUtil#escape} 转义后套入格式串，
+ * ① Markdown 渲染：玩家名/消息内容经 {@link MarkdownUtil#escape} 转义后套入格式串，
  *    整体包成引用块发 QQ（msg_type=2 自定义 Markdown，群聊/单聊已开放）；可关 {@code markdownToQq} 退回纯文本；
- * ③ 限速：{@code sendIntervalMs} 最小间隔（远低于平台群频控 20qpm）；
- * ④ 被动兜底：主动推送失败（群「推送开关」未开等）时入 {@code pendingPassive}，
+ * ② 限速：{@code sendIntervalMs} 最小间隔（远低于平台群频控 20qpm）；
+ * ③ 被动兜底：主动推送失败（群「推送开关」未开等）时入 {@code pendingPassive}，
  *    等下一条 @机器人 事件带 msg_id 时按被动回复冲刷（每 msg_id ≤5 条，5 分钟窗口）。
  */
 public final class ChatRelay {
@@ -41,17 +40,11 @@ public final class ChatRelay {
 
 	/** 玩家聊天（CHAT 事件） */
 	public void onPlayerChat(String name, String message) {
-		if (isEcho(message)) {
-			return;
-		}
 		push(format(config.chatToQqFormat, name, message));
 	}
 
 	/** 系统/游戏消息（GAME 事件，已排除 actionbar） */
 	public void onGameMessage(String message) {
-		if (isEcho(message)) {
-			return;
-		}
 		push(format(config.gameToQqFormat, "", message));
 	}
 
@@ -117,12 +110,6 @@ public final class ChatRelay {
 		while (pendingPassive.size() > Math.max(1, config.maxPendingMessages)) {
 			pendingPassive.poll();
 		}
-	}
-
-	/** 回环抑制：本桥注入游戏的文本带固定前缀，回显不再回流 */
-	private boolean isEcho(String message) {
-		String marker = config.qqPrefixMarker;
-		return marker != null && !marker.isEmpty() && message != null && message.startsWith(marker);
 	}
 
 	/**
